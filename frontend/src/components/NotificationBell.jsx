@@ -104,7 +104,7 @@ export default function NotificationBell() {
               )}
 
               {checkin.length > 0 && (
-                <button onClick={() => { setOpen(false); navigate("/target?tab=kpi"); }} data-testid="notif-checkin"
+                <button onClick={() => { setOpen(false); navigate(user?.role === "spv" ? "/target?tab=kpi" : "/harian"); }} data-testid="notif-checkin"
                   className="flex w-full items-center gap-2 border-b border-emerald-50 bg-amber-50/50 px-3 py-2.5 text-left hover:bg-amber-50">
                   <Target size={15} className="text-amber-700" />
                   <span className="text-xs font-medium text-amber-900">{checkin.length} KPI menunggu check-in pekan ini</span>

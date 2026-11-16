@@ -42,7 +42,7 @@ function AppRouter() {
         <Route path="/spiritual" element={<Spiritual />} />
         <Route path="/raport" element={<ProtectedRoute requireSpv><Raport /></ProtectedRoute>} />
         <Route path="/monitoring" element={<ProtectedRoute requireMonitor><Monitoring /></ProtectedRoute>} />
-        <Route path="/target" element={<Sasaran />} />
+        <Route path="/target" element={<ProtectedRoute requireSpv><Sasaran /></ProtectedRoute>} />
         <Route path="/sasaran" element={<Navigate to="/target" replace />} />
         <Route path="/strategy" element={<Navigate to="/target" replace />} />
         <Route path="/users" element={<ProtectedRoute requireSpv><UsersManagement /></ProtectedRoute>} />

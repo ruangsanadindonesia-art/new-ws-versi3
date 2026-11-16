@@ -124,7 +124,7 @@ function HariIni({ onOpen }) {
               </li>
             ))}
           </ul>
-          <Link to="/target?tab=kpi" className="block w-full border-t border-emerald-50 px-4 py-2 text-left text-xs font-medium text-emerald-700 hover:bg-emerald-50">Lihat Target Bersama →</Link>
+          {user?.role === "spv" && <Link to="/target?tab=kpi" className="block w-full border-t border-emerald-50 px-4 py-2 text-left text-xs font-medium text-emerald-700 hover:bg-emerald-50">Lihat Target Bersama →</Link>}
         </section>
       )}
       <CheckinDialog ukuran={ck} open={!!ck} onOpenChange={(v) => !v && setCk(null)} onSaved={loadUkuran} />

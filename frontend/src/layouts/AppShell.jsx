@@ -14,7 +14,7 @@ import SanadLogo from "@/components/SanadLogo";
 const NAV = [
   { to: "/tasks", label: "Tugas", icon: ListTodo, testId: "nav-tasks", badgeKey: "tasks" },
   { to: "/harian", label: "Harian Saya", icon: HeartHandshake, testId: "nav-harian" },
-  { to: "/target", label: "Target Bersama", icon: Target, testId: "nav-target" },
+  { to: "/target", label: "Target Bersama", icon: Target, testId: "nav-target", spvOnly: true },
   { to: "/laporan", label: "Laporan", icon: BarChart3, testId: "nav-laporan" },
   { to: "/pengaturan", label: "Pengaturan", icon: Settings, testId: "nav-pengaturan" },
 ];
@@ -23,8 +23,9 @@ const HIDDEN_TITLES = [
   ["/users", "Manajemen User"], ["/spiritual", "Spiritual Tracker"], ["/tugas-rutin", "Tugas Rutin Tracker"], ["/profile", "Profil"],
 ];
 
-function navFor() {
-  return NAV;
+// Menu bertanda spvOnly hanya tampil untuk SPV (anggota & kepala tim tidak melihatnya).
+function navFor(user) {
+  return NAV.filter((n) => !n.spvOnly || user?.role === "spv");
 }
 
 function SidebarBody({ onNavigate, unreadTotal, user, onLogout }) {
