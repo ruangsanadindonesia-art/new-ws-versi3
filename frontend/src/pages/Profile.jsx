@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { UserCog, KeyRound, Save, Loader2, ShieldCheck, User as UserIcon, Copy, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -30,7 +30,7 @@ export default function Profile() {
     finally { setLoadingKeys(false); }
   };
 
-  useEffect(() => { if (isSpv) loadApiKeys(); }, [isSpv]);
+
 
   const submit = async (e) => {
     e.preventDefault();
@@ -155,42 +155,9 @@ export default function Profile() {
         </Button>
       </form>
 
-      {isSpv && <section className="rounded-2xl border border-emerald-100 bg-white p-5" data-testid="api-keys-section">
-        <div className="mb-1 flex items-center gap-2">
-          <KeyRound size={16} className="text-emerald-800" />
-          <h3 className="font-display text-base font-semibold text-emerald-950">API Key Integrasi</h3>
-        </div>
-        <p className="mb-4 text-xs text-emerald-800/65">Gunakan untuk integrasi eksternal melalui header <code>Authorization: Bearer &lt;API_KEY&gt;</code>. Key mengikuti akses SPV Anda.</p>
-
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <Input data-testid="api-key-name" value={apiKeyName} onChange={(e) => setApiKeyName(e.target.value)} placeholder="Contoh: Integrasi Website" maxLength={80} />
-          <Button type="button" onClick={generateApiKey} disabled={creatingKey} data-testid="api-key-generate" className="bg-emerald-900 text-white hover:bg-emerald-800">
-            {creatingKey ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />} Buat Key
-          </Button>
-        </div>
-
-        {generatedKey && <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3" data-testid="api-key-created">
-          <p className="text-xs font-semibold text-amber-950">Simpan key ini sekarang. Nilainya tidak dapat dilihat lagi.</p>
-          <div className="mt-2 flex gap-2">
-            <Input readOnly value={generatedKey} className="bg-white font-mono text-xs" data-testid="api-key-value" />
-            <Button type="button" size="icon" variant="outline" onClick={copyApiKey} aria-label="Salin API key"><Copy size={15} /></Button>
-          </div>
-        </div>}
-
-        <div className="mt-4 space-y-2">
-          {loadingKeys && <p className="text-xs text-emerald-800/60">Memuat API key...</p>}
-          {!loadingKeys && apiKeys.length === 0 && <p className="text-xs text-emerald-800/60">Belum ada API key.</p>}
-          {apiKeys.map((key) => <div key={key.id} className="flex items-center justify-between gap-3 rounded-lg border border-emerald-100 px-3 py-2" data-testid={`api-key-${key.id}`}>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-emerald-950">{key.name}</p>
-              <p className="font-mono text-[11px] text-emerald-800/60">{key.prefix}... {key.revoked_at ? "- dicabut" : "- aktif"}</p>
-            </div>
-            {!key.revoked_at && <Button type="button" size="sm" variant="ghost" onClick={() => revoke(key.id)} disabled={revokingKey === key.id} className="text-red-700 hover:bg-red-50 hover:text-red-800">
-              {revokingKey === key.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />} Cabut
-            </Button>}
-          </div>)}
-        </div>
-      </section>}
+      <p className="rounded-xl border border-emerald-100 bg-white p-4 text-xs text-emerald-800/80" data-testid="api-keys-moved">
+        Kunci API untuk agent AI (Hermes, dll.) kini ada di <a href="/pengaturan?tab=integrasi" className="font-semibold text-emerald-800 underline">Pengaturan › Integrasi AI</a>.
+      </p>
     </div>
   );
 }

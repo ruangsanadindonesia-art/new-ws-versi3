@@ -60,6 +60,8 @@ class ResetPasswordPayload(BaseModel):
 
 class ApiKeyCreatePayload(BaseModel):
     name: str = Field(min_length=1, max_length=80)
+    scope: str = "read"      # read | write  (kunci personal)
+    kind: str = "personal"   # personal | gateway (gateway: SPV saja, selalu baca-saja)
 
 
 # ============== LOGIN RATE LIMIT ==============
@@ -157,15 +159,8 @@ async def get_current_user_optional(request: Request, db):
             await db.user_sessions.delete_one({"session_token": token})
             return None
         return await db.users.find_one({"user_id": sess["user_id"]}, {"_id": 0})
-
-    # API keys are stored only as SHA-256 hashes and may authenticate server-to-server calls.
-    key_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    api_key = await db.api_keys.find_one({"key_hash": key_hash, "revoked_at": None}, {"_id": 0})
-    if not api_key:
-        return None
-    await db.api_keys.update_one({"id": api_key["id"]}, {"$set": {"last_used_at": datetime.now(timezone.utc)}})
-    user = await db.users.find_one({"user_id": api_key["user_id"]}, {"_id": 0})
-    return user
+    # API key (rs_live_...) TIDAK berlaku untuk REST API; hanya untuk endpoint MCP /api/mcp (lihat agent_mcp.py).
+    return None
 
 
 def make_auth_dependencies(db):
@@ -384,24 +379,45 @@ def build_auth_router(db: AsyncIOMotorDatabase) -> APIRouter:
         await db.api_keys.delete_many({"user_id": user_id})
         return {"ok": True, "deleted": r.deleted_count}
 
-    # ---------- API KEYS (SPV) ----------
+    # ---------- API KEYS UNTUK AGENT AI (MCP) ----------
+    # Setiap user boleh membuat kunci personal (bertindak sebagai dirinya). Gateway (Hermes bersama) hanya SPV.
+    MAX_KEYS = 5
+
     @router.get("/api-keys")
-    async def list_api_keys(current: dict = Depends(require_spv)):
-        return await db.api_keys.find(
-            {"user_id": current["user_id"]},
-            {"_id": 0, "key_hash": 0},
-        ).sort("created_at", -1).to_list(100)
+    async def list_api_keys(request: Request):
+        current = await get_current_user(request)
+        q = {"user_id": current["user_id"]}
+        if current.get("role") == "spv" and request.query_params.get("semua") == "1":
+            q = {}
+        rows = await db.api_keys.find(q, {"_id": 0, "key_hash": 0}).sort("created_at", -1).to_list(200)
+        if q == {}:
+            names = {u["user_id"]: u.get("name") for u in await db.users.find({}, {"_id": 0, "user_id": 1, "name": 1}).to_list(1000)}
+            for r in rows:
+                r["owner_name"] = names.get(r["user_id"])
+        return rows
 
     @router.post("/api-keys")
-    async def create_api_key(payload: ApiKeyCreatePayload, current: dict = Depends(require_spv)):
+    async def create_api_key(payload: ApiKeyCreatePayload, request: Request):
+        current = await get_current_user(request)
         name = payload.name.strip()
         if not name:
             raise HTTPException(400, "Nama integrasi wajib diisi.")
+        if payload.kind not in ("personal", "gateway"):
+            raise HTTPException(400, "Jenis kunci tidak valid.")
+        if payload.kind == "gateway" and current.get("role") != "spv":
+            raise HTTPException(403, "Kunci gateway (Hermes bersama) hanya bisa dibuat SPV.")
+        if payload.scope not in ("read", "write"):
+            raise HTTPException(400, "Scope harus read atau write.")
+        active = await db.api_keys.count_documents({"user_id": current["user_id"], "revoked_at": None})
+        if active >= MAX_KEYS:
+            raise HTTPException(400, f"Maksimal {MAX_KEYS} kunci aktif. Cabut kunci lama dulu.")
         raw_key = f"rs_live_{secrets.token_urlsafe(32)}"
         doc = {
             "id": str(uuid.uuid4()),
             "user_id": current["user_id"],
             "name": name,
+            "kind": payload.kind,
+            "scope": "read" if payload.kind == "gateway" else payload.scope,
             "prefix": raw_key[:16],
             "key_hash": hashlib.sha256(raw_key.encode("utf-8")).hexdigest(),
             "created_at": datetime.now(timezone.utc),
@@ -412,14 +428,49 @@ def build_auth_router(db: AsyncIOMotorDatabase) -> APIRouter:
         return {**{k: v for k, v in doc.items() if k not in ("_id", "key_hash")}, "key": raw_key}
 
     @router.delete("/api-keys/{key_id}")
-    async def revoke_api_key(key_id: str, current: dict = Depends(require_spv)):
-        result = await db.api_keys.update_one(
-            {"id": key_id, "user_id": current["user_id"], "revoked_at": None},
-            {"$set": {"revoked_at": datetime.now(timezone.utc)}},
-        )
+    async def revoke_api_key(key_id: str, request: Request):
+        current = await get_current_user(request)
+        q = {"id": key_id, "revoked_at": None}
+        if current.get("role") != "spv":
+            q["user_id"] = current["user_id"]  # SPV boleh mencabut kunci siapa pun
+        result = await db.api_keys.update_one(q, {"$set": {"revoked_at": datetime.now(timezone.utc)}})
         if not result.modified_count:
             raise HTTPException(404, "API key tidak ditemukan atau sudah dicabut.")
+        await db.agent_chat_links.delete_many({"gateway_key_id": key_id})
         return {"ok": True}
+
+    # ---------- PENAUTAN AKUN CHAT (HERMES BERSAMA) ----------
+    @router.post("/agent/link-code")
+    async def create_link_code(request: Request):
+        current = await get_current_user(request)
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        code = "WS-" + "".join(secrets.choice(alphabet) for _ in range(6))
+        expires = datetime.now(timezone.utc) + timedelta(minutes=10)
+        await db.agent_link_codes.delete_many({"user_id": current["user_id"]})
+        await db.agent_link_codes.insert_one({"code": code, "user_id": current["user_id"], "expires_at": expires})
+        return {"kode": code, "berlaku_sampai": expires}
+
+    @router.get("/agent/links")
+    async def list_links(request: Request):
+        current = await get_current_user(request)
+        return await db.agent_chat_links.find({"user_id": current["user_id"]}, {"_id": 0}).to_list(50)
+
+    @router.delete("/agent/links")
+    async def delete_link(chat_id: str, request: Request):
+        current = await get_current_user(request)
+        r = await db.agent_chat_links.delete_many({"user_id": current["user_id"], "chat_id": chat_id})
+        return {"ok": True, "deleted": r.deleted_count}
+
+    @router.get("/agent/audit")
+    async def agent_audit(request: Request):
+        current = await get_current_user(request)
+        q = {} if current.get("role") == "spv" else {"user_id": current["user_id"]}
+        rows = await db.agent_audit.find(q, {"_id": 0}).sort("at", -1).to_list(100)
+        if rows:
+            names = {u["user_id"]: u.get("name") for u in await db.users.find({}, {"_id": 0, "user_id": 1, "name": 1}).to_list(1000)}
+            for r in rows:
+                r["user_name"] = names.get(r["user_id"])
+        return rows
 
     # ---------- PROFILE (SELF-SERVICE) ----------
     @router.put("/profile")

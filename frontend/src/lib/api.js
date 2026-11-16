@@ -21,9 +21,13 @@ export const deleteUserAcc = (id) => api.delete(`/auth/users/${id}`).then((r) =>
 export const updateProfile = (p) => api.put("/auth/profile", p).then((r) => r.data);
 export const createUserAcc = (p) => api.post("/auth/users", p).then((r) => r.data);
 export const resetUserPassword = (id, new_password) => api.put(`/auth/users/${id}/password`, { new_password }).then((r) => r.data);
-export const listApiKeys = () => api.get("/auth/api-keys").then((r) => r.data);
-export const createApiKey = (name) => api.post("/auth/api-keys", { name }).then((r) => r.data);
+export const listApiKeys = (semua = false) => api.get("/auth/api-keys", { params: semua ? { semua: 1 } : {} }).then((r) => r.data);
+export const createApiKey = (name, scope = "read", kind = "personal") => api.post("/auth/api-keys", { name, scope, kind }).then((r) => r.data);
 export const revokeApiKey = (id) => api.delete(`/auth/api-keys/${id}`).then((r) => r.data);
+export const createLinkCode = () => api.post("/auth/agent/link-code").then((r) => r.data);
+export const listChatLinks = () => api.get("/auth/agent/links").then((r) => r.data);
+export const deleteChatLink = (chat_id) => api.delete("/auth/agent/links", { params: { chat_id } }).then((r) => r.data);
+export const agentAudit = () => api.get("/auth/agent/audit").then((r) => r.data);
 
 // ============ SEARCH ============
 export const globalSearch = (q) => api.get("/search", { params: { q } }).then((r) => r.data);

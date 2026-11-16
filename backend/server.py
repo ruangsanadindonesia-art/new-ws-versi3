@@ -111,7 +111,8 @@ async def _assert_bulk_task_access(ids: List[str], user: dict) -> List[dict]:
 
 
 PUBLIC_PATHS = {"/api", "/api/"}
-AUTH_PUBLIC_PREFIXES = ("/api/auth/register", "/api/auth/login", "/api/auth/google", "/api/auth/me", "/api/auth/logout")
+AUTH_PUBLIC_PREFIXES = ("/api/auth/register", "/api/auth/login", "/api/auth/google", "/api/auth/me", "/api/auth/logout",
+                        "/api/mcp")  # /api/mcp mengautentikasi API key sendiri (agent_mcp.py)
 
 
 @app.middleware("http")
@@ -2113,6 +2114,10 @@ api_router.include_router(build_auth_router(db))
 api_router.include_router(build_monitoring_router(db, get_current_user, user_scope))
 api_router.include_router(build_strategy_router(db, get_current_user, require_spv, user_scope))
 
+import sys as _sys
+from agent_mcp import build_mcp_router
+api_router.include_router(build_mcp_router(_sys.modules[__name__]))
+
 # Include router
 app.include_router(api_router)
 
@@ -2142,6 +2147,12 @@ app.add_middleware(
 @app.on_event("startup")
 async def on_startup():
     await seed_admin(db)
+    try:
+        await db.agent_link_codes.create_index("expires_at", expireAfterSeconds=0)
+        await db.agent_chat_links.create_index([("chat_id", 1), ("gateway_key_id", 1)], unique=True)
+        await db.agent_audit.create_index("at", expireAfterSeconds=60 * 60 * 24 * 180)  # simpan 180 hari
+    except Exception:
+        pass
     # Migrate existing amaliyah_entries without user_id → assign to first SPV
     spv = await db.users.find_one({"role": "spv", "status": "approved"}, {"_id": 0})
     if spv:
