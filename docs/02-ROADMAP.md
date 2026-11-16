@@ -20,12 +20,12 @@ Urutan berdasarkan dampak dan risiko. Centang `[x]` saat selesai dan tulis hash 
 
 ## C. Modul HR (fitur baru) — lihat `03-PRD-MODUL-HR.md`
 
-- [ ] HR-1 Peran HR + profil kerja + shift + roster + kalender libur
+- [ ] HR-1 Peran HR + data dummy (Lala) + jadwal dinamis per orang + roster + kalender libur
 - [ ] HR-2 Absensi masuk/pulang (sesi), koreksi, lupa pulang, lembur
 - [ ] HR-3 Izin & cuti dengan persetujuan berjenjang (kepala tim → HR) + saldo cuti
 - [ ] HR-4 Rekap kehadiran harian/bulanan (status per hari, telat, kurang jam)
 - [ ] HR-5 Raport bulanan terpadu (kehadiran + tugas + KPI + amaliyah + penilaian atasan) per orang & per tim, PDF
-- [ ] HR-6 Impor data mesin fingerprint (opsional, porting dari repo leaderboard)
+- [ ] HR-6 Impor fingerprint untuk masa transisi 2–4 pekan, lalu mesin dihentikan (lewati bila langsung pindah)
 - [ ] HR-7 Tool MCP Hermes: absen masuk/pulang, ajukan izin, cek saldo cuti, rekap saya
 
 ## D. Nanti / opsional

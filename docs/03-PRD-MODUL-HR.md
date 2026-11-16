@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draf v1 — siap dieksekusi per fase |
+| Status | v1.1 — keputusan pemilik produk sudah masuk (§12); siap dieksekusi per fase |
 | Pemilik produk | Pimpinan Ruang Sanad |
 | Tanggal | 16 November 2026 |
 | Prasyarat | Baca `01-KONTEKS-SISTEM.md` (stack, pola kode, `user_scope`) |
@@ -41,7 +41,7 @@
 ### Bukan tujuan (di luar cakupan v1)
 
 - Payroll, potongan gaji, ujroh, BPJS.
-- Verifikasi lokasi GPS/selfie (dicatat sebagai opsi D1 di roadmap).
+- Verifikasi lokasi GPS/selfie/IP. **Keputusan: absen berbasis kejujuran** (lihat §12). Opsi D1 di roadmap.
 - Absensi santri atau guru (itu di Dashboard Ruang Sanad).
 - Rekrutmen, kontrak, dokumen karyawan.
 
@@ -73,9 +73,10 @@ Aturan khusus persetujuan:
 | Istilah | Arti |
 |---|---|
 | **Profil kerja** | Pengaturan per anggota: wajib absen atau tidak, mode jadwal, target menit, pola mingguan |
-| **Mode jadwal** | `SHIFT` (jadwal jam tetap per segmen), `FLEKSIBEL` (hanya target jumlah jam), `TANPA_ABSEN` (dikecualikan) |
-| **Shift** | Template jam kerja berisi beberapa **segmen** (lokasi + jam mulai/selesai, atau fleksibel) |
-| **Pola mingguan** | Default per anggota: Senin–Minggu masing-masing berisi kode shift atau `LIBUR` |
+| **Mode jadwal** | `TERJADWAL` (punya segmen jam), `FLEKSIBEL` (hanya target jumlah jam per hari), `TANPA_ABSEN` (dikecualikan) |
+| **Segmen** | Satu blok kerja: lokasi `KANTOR`/`REMOTE`/`BEBAS` + jam mulai–selesai **atau** durasi fleksibel tanpa jam. Contoh: 08:00–14:00 Kantor (6 jam) + Remote fleksibel 2 jam = 8 jam |
+| **Shift** | Template segmen bersama yang bisa dipakai banyak orang (mis. Shift Pagi, Shift Siang). Opsional |
+| **Pola mingguan** | Jadwal default per anggota per hari (Senin–Minggu). Tiap hari berisi salah satu: kode shift bersama, **jadwal khusus** (daftar segmen milik orang itu sendiri), atau `LIBUR` |
 | **Roster** | Pengecualian per tanggal (tukar shift, libur pengganti) — mengalahkan pola mingguan |
 | **Sesi** | Satu pasang masuk–pulang. Satu hari bisa beberapa sesi (pagi remote, siang kantor) |
 | **Status harian** | Hasil hitung per orang per hari: HADIR, ALPA, IZIN, SAKIT, CUTI, DINAS, LIBUR, BELUM_ADA_DATA |
@@ -89,7 +90,25 @@ Aturan khusus persetujuan:
 2. Ada **roster** untuk tanggal itu → pakai roster.
 3. Tanggal ada di **kalender libur** (berlaku untuk semua atau tim tertentu) → `LIBUR`.
 4. Pakai **pola mingguan** profil.
-5. Hasil: `LIBUR` atau sebuah shift (untuk mode `FLEKSIBEL`: "hari kerja" dengan target menit harian).
+5. Hasil: `LIBUR` atau daftar segmen (dari shift bersama atau jadwal khusus). Target menit hari itu = jumlah menit semua segmen. Mode `FLEKSIBEL`: "hari kerja" dengan target menit harian, tanpa jam.
+
+#### Jadwal dinamis (keputusan pemilik produk)
+
+Jam kerja tiap orang berbeda-beda dan **tidak boleh dipaksa ke beberapa shift baku**. Karena itu:
+- HR mengatur jadwal **per orang per hari** lewat editor segmen (tambah/hapus blok, pilih lokasi, isi jam atau durasi). Shift bersama hanya jalan pintas untuk pola yang sama.
+- Satu hari boleh campuran lokasi. Contoh yang wajib didukung:
+
+| Orang (contoh) | Senin–Jumat | Sabtu | Total/hari |
+|---|---|---|---|
+| A — hybrid | 08:00–14:00 Kantor + Remote fleksibel 2 jam | Libur | 8 jam |
+| B — remote pagi + kantor | 06:30–07:30 Remote + 08:00–14:00 Kantor + Remote fleksibel 1 jam | Libur | 8 jam |
+| C — siang | 12:00–16:00 Kantor + Remote fleksibel 4 jam | 08:00–12:00 Kantor | 8 / 4 jam |
+| D — fleksibel penuh | Mode FLEKSIBEL, 8 jam, lokasi bebas | Libur | 8 jam |
+| E — beda tiap hari | Sen/Rab 8 jam Kantor, Sel/Kam 8 jam Remote, Jum 4 jam Kantor + 4 jam Remote | Libur | 8 jam |
+
+- **Validasi editor:** segmen berjam tidak boleh tumpang tindih; jam selesai > jam mulai (tidak melewati tengah malam di v1); total per hari 0–16 jam; tampilkan total per hari dan per minggu langsung saat mengedit.
+- **Perhitungan per lokasi:** rekap mencatat menit kantor dan menit remote terpisah sebagai **informasi**. Penanda `KURANG_JAM` dihitung dari **total** menit. Kekurangan jam kantor saja tidak menjadi penanda di v1 (keputusan "kejujuran dulu").
+- Jadwal berlaku mulai tanggal tertentu (`berlaku_mulai`) agar perubahan jadwal tidak mengubah rekap bulan yang sudah lewat. Simpan riwayat versi pola mingguan.
 
 ### 5.2 Sesi absen
 
@@ -98,6 +117,7 @@ Aturan khusus persetujuan:
 - Sesi aktif dari tanggal sebelumnya → otomatis `TIDAK_LENGKAP` (saat aksi berikutnya **dan** oleh job harian pukul 03:00 WIB). Durasinya **tidak** dihitung sampai dikoreksi lewat "lupa pulang".
 - Durasi sesi maksimal 16 jam. Waktu diambil dari server, bukan dari HP.
 - Sumber sesi: `APP`, `KOREKSI` (dari pengajuan disetujui), `FINGERPRINT` (impor, fase HR-6).
+- **Berbasis kejujuran:** lokasi Kantor/Remote dipilih sendiri oleh pengguna, tanpa GPS, foto, atau cek IP. Simpan `user_agent` dan alamat IP setiap aksi absen hanya di `hr_log` untuk audit bila ada sengketa — **tidak** dipakai untuk menolak absen dan tidak ditampilkan di layar.
 
 ### 5.3 Perhitungan harian (fungsi murni, wajib diuji unit)
 
@@ -185,16 +205,21 @@ hr_kebijakan (singleton id="utama")
   batas_penilaian_hari:int=5, batas_terbit_hari:int=7
 
 hr_profil (1 per anggota)
-  id, anggota_id (unik), wajib_absen:bool, mode:"SHIFT"|"FLEKSIBEL"|"TANPA_ABSEN",
+  id, anggota_id (unik), wajib_absen:bool, mode:"TERJADWAL"|"FLEKSIBEL"|"TANPA_ABSEN",
   target_harian_menit:int=480, target_mingguan_menit:int=2640,
-  pola_mingguan:{"1":"PAGI","2":"PAGI",...,"6":"LIBUR","7":"LIBUR"}, tanggal_bergabung:"YYYY-MM-DD", updated_at
+  tanggal_bergabung:"YYYY-MM-DD", fingerprint_id:str|null, dummy:bool=false, updated_at
+
+hr_pola (versi pola mingguan per anggota; yang berlaku = berlaku_mulai terbesar <= tanggal)
+  id, anggota_id, berlaku_mulai:"YYYY-MM-DD", dibuat_oleh, created_at,
+  hari:{ "1":{tipe:"SHIFT",shift_kode:"PAGI"} | {tipe:"KHUSUS",segmen:[...]} | {tipe:"LIBUR"}, ..., "7":{...} }
+  -- segmen sama dengan format hr_shift.segmen
 
 hr_shift
   id, kode (unik), nama, aktif:bool, total_menit:int,
   segmen:[{urutan:int, lokasi:"KANTOR"|"REMOTE"|"BEBAS", mulai:"HH:MM"|null, selesai:"HH:MM"|null, menit:int, fleksibel:bool}]
 
 hr_roster
-  id, anggota_id, tanggal, shift_kode|null, libur:bool, catatan, dibuat_oleh, created_at    (unik: anggota_id+tanggal)
+  id, anggota_id, tanggal, tipe:"SHIFT"|"KHUSUS"|"LIBUR", shift_kode|null, segmen:[]|null, catatan, dibuat_oleh, created_at    (unik: anggota_id+tanggal)
 
 hr_libur
   id, tanggal, nama, divisi_ids:[] (kosong = semua)
@@ -217,7 +242,7 @@ hr_jenis_izin
   min_hari_sebelum:int, boleh_mundur_hari:int, wajib_lampiran_jika_lebih_hari:int|null, maks_hari_per_kejadian:int|null, aktif
 
 hr_rekap_harian (cache hasil hitung)
-  anggota_id, tanggal, status, penanda:[], menit_kerja, menit_target, menit_lembur, shift_kode, dihitung_at
+  anggota_id, tanggal, status, penanda:[], menit_kerja, menit_kantor, menit_remote, menit_target, menit_lembur, jadwal_ringkas, dihitung_at
   (unik: anggota_id+tanggal)
 
 hr_raport
@@ -248,6 +273,7 @@ Saldo cuti/izin **tidak disimpan**, dihitung: kuota (prorata) − Σ `hari_dihit
 | `GET /hr/rekap?bulan=&divisi_id=&anggota_id=` | kepala tim/HR/SPV | Matriks status harian per orang + total |
 | `GET/PUT /hr/kebijakan` | HR/SPV | Kebijakan |
 | `GET/PUT /hr/profil/{anggota_id}` | HR/SPV | Profil kerja |
+| `GET/POST /hr/pola/{anggota_id}` | HR/SPV (lihat: kepala tim timnya, orangnya sendiri) | Riwayat & versi baru pola mingguan (jadwal dinamis) |
 | `GET/POST/PUT/DELETE /hr/shift` | HR/SPV | Shift & segmen |
 | `GET/PUT/DELETE /hr/roster` | HR/SPV/kepala tim (timnya) | Roster per tanggal |
 | `GET/POST/DELETE /hr/libur` | HR/SPV | Kalender libur |
@@ -269,7 +295,7 @@ Job latar (pola sama seperti `dashboard_sync.loop` di `server.py`): 03:00 WIB ta
 | **Persetujuan** | "Kehadiran" → tab Persetujuan (kepala tim/HR/SPV) | Daftar menunggu dengan konteks (saldo, jadwal, riwayat 30 hari), tombol Setujui/Tolak |
 | **Hari Ini** | Menu "HR" (HR/SPV; kepala tim melihat timnya di Laporan) | Siapa sudah masuk/belum/izin/libur, sesi tidak lengkap |
 | **Rekap Bulanan** | Menu "HR" | Matriks orang × tanggal berwarna, total hadir/telat/alpa/izin/jam, ekspor |
-| **Jadwal** | Menu "HR" | Shift & segmen, pola mingguan per orang, roster (kalender), kalender libur |
+| **Jadwal** | Menu "HR" | Daftar orang + ringkasan jadwal (mis. "Sen–Jum 6j kantor + 2j remote"); **editor jadwal per orang**: grid 7 hari, tiap hari berisi blok segmen yang bisa ditambah/diubah, total jam per hari & minggu, tanggal berlaku; shift bersama; roster per tanggal; kalender libur |
 | **Raport Bulanan** | Menu "HR" + Laporan | Daftar per tim, status DRAF/DINILAI/TERBIT, form penilaian atasan, kunci, PDF |
 | **Pengaturan HR** | Menu "HR" | Kebijakan, jenis izin & kuota, bobot raport |
 
@@ -299,7 +325,12 @@ Setiap fase: kerjakan → uji di DB salinan → deploy → commit. Jangan gabung
 
 ### HR-1 — Fondasi data & pengaturan
 - **File:** `backend/hr.py` (baru), `backend/server.py` (include router, index, `user_scope` + `is_hr`, role `hr` di manajemen pengguna), `backend/auth.py` (izinkan role `hr`), `frontend/src/lib/api.js`, `frontend/src/App.js`, `frontend/src/layouts/AppShell.jsx`, `frontend/src/pages/hr/Pengaturan*.jsx` (baru), `frontend/src/pages/UsersManagement.jsx`.
-- **Seed:** kebijakan default, 2 shift default (Pagi, Siang — segmen seperti leaderboard), jenis izin §5.4, profil untuk semua anggota (`wajib_absen=true`, mode `SHIFT`, pola Senin–Jumat PAGI, Sabtu–Minggu LIBUR) — HR menyesuaikan.
+- **Seed:** kebijakan default (bobot raport 35/25/25/15), 2 shift bersama contoh (Pagi, Siang), jenis izin §5.4, profil untuk semua anggota (`wajib_absen=true`, mode `TERJADWAL`, pola awal Senin–Jumat 08:00–14:00 Kantor + Remote fleksibel 2 jam, Sabtu–Minggu LIBUR) — HR menyesuaikan per orang.
+- **Data dummy (wajib, untuk uji coba sebelum dipakai tim):** skrip `backend/seed_hr_dummy.py` (idempoten, `--hapus` untuk membersihkan semua data bertanda `dummy: true`):
+  - Divisi **HR** (dummy) dan anggota **Lala** dengan akun role `hr`, email `lala.hr@ruangsanad.test`. Password **tidak** ditulis di kode/repo: dibaca dari variabel lingkungan `DUMMY_PASSWORD` saat skrip dijalankan.
+  - 5 anggota dummy di divisi HR dengan pola contoh A–E (§5.1), masing-masing dengan akun role `anggota` (email `dummy.a@ruangsanad.test`, dst.); Lala menjadi kepala divisi HR dummy agar alur persetujuan 2 tahap bisa diuji.
+  - Sesi absen 30 hari terakhir untuk anggota dummy dengan variasi: tepat waktu, telat, pulang awal, kurang jam, lupa pulang, satu cuti disetujui, satu sakit, satu alpa — agar rekap & raport langsung terisi.
+  - Semua dokumen dummy diberi `dummy: true`; laporan/raport untuk tim nyata **mengecualikan** data dummy.
 - **Kriteria selesai:** SPV bisa menjadikan pengguna HR; HR bisa mengubah kebijakan, shift (dengan segmen), pola mingguan, roster, libur; anggota tidak bisa mengakses endpoint pengaturan (403); fungsi `jadwal_efektif(anggota, tanggal)` lolos uji unit untuk 5 aturan prioritas §5.1.
 
 ### HR-2 — Absensi
@@ -316,20 +347,28 @@ Setiap fase: kerjakan → uji di DB salinan → deploy → commit. Jangan gabung
 - **File:** `backend/hr_raport.py` (baru), PDF memakai pola `pdf_export.py`, `frontend/src/pages/hr/Raport*.jsx`.
 - **Kriteria selesai:** rumus §5.6 diuji dengan data contoh (termasuk aturan "data belum cukup"); alur DRAF → DINILAI → TERBIT; anggota hanya melihat raport sendiri yang TERBIT; PDF per orang & per tim.
 
-### HR-6 — Impor fingerprint (opsional)
+### HR-6 — Impor fingerprint (masa transisi)
+- **Keputusan:** mesin fingerprint masih dipakai sekarang, tetapi **dihentikan setelah absen di aplikasi berjalan**. Maka HR-6 hanya untuk masa transisi: jalankan paralel 2–4 pekan (tim absen di mesin **dan** aplikasi), impor data mesin, bandingkan. Kriteria berhenti memakai mesin: ≥ 95% hari kerja di aplikasi cocok dengan mesin (selisih jam masuk ≤ 15 menit) selama 2 pekan berturut-turut. Setelah itu HR-6 tidak dipakai lagi; data impor disimpan sebagai arsip.
+- Jika HR memutuskan langsung pindah tanpa masa paralel, **lewati HR-6**.
 - Port parser `app/fingerprint/parser.go` (format "Tanggal Kehadiran : YYYY-MM-DD ~ YYYY-MM-DD", jam `HH:MM` per hari) ke Python (`xlrd`). Pasangkan jam pertama–terakhir per hari menjadi sesi `sumber=FINGERPRINT` lokasi KANTOR. Pratinjau wajib sebelum simpan. Tambah field `fingerprint_id` di `hr_profil`.
 
 ### HR-7 — Hermes
 - Tambah tool di `agent_mcp.py` (§9) memakai fungsi yang sama dengan REST, termasuk pengecekan izin.
 
-## 12. Pertanyaan terbuka (jawab sebelum HR-1)
+## 12. Keputusan pemilik produk (16 Nov 2026)
 
-1. Siapa yang menjadi HR? (Dibutuhkan untuk seed role.)
-2. Pola kerja nyata per orang: siapa shift pagi, siapa siang, siapa fleksibel, hari Sabtu kerja atau tidak?
-3. Apakah mesin fingerprint kantor masih dipakai? Jika ya, HR-6 menjadi prioritas lebih tinggi.
-4. Apakah absen di kantor perlu dibuktikan (lokasi/IP) sejak awal, atau cukup kejujuran dulu? (Rekomendasi: kejujuran dulu, ukur 1 bulan, lalu putuskan.)
-5. Apakah raport terbit dapat dilihat anggota yang bersangkutan? (Rekomendasi: ya — raport yang tidak dilihat orangnya tidak mengubah perilaku.)
-6. Bobot amaliyah di skor raport: 15 atau 0 (informasi saja)?
+| # | Pertanyaan | Keputusan | Dampak ke spesifikasi |
+|---|---|---|---|
+| 1 | Siapa HR? | Pakai **data dummy "Lala"** dulu | Seed dummy di HR-1; HR asli ditunjuk kemudian lewat Pengaturan → Pengguna |
+| 2 | Pola kerja per orang | **Berbeda-beda, dibuat dinamis**; mis. 6 jam kantor + 2 jam di rumah = 8 jam/hari | Jadwal per orang per hari dengan segmen campuran (§5.1 Jadwal dinamis), versi berlaku mulai tanggal |
+| 3 | Mesin fingerprint | Masih dipakai, **dihentikan** setelah aplikasi berjalan | HR-6 = masa transisi saja, dengan kriteria berhenti |
+| 4 | Bukti lokasi | **Kejujuran dulu** | Tanpa GPS/foto/IP; IP & perangkat hanya dicatat di log audit |
+| 5 | Raport terlihat oleh orangnya | **Boleh** | Anggota melihat raport sendiri setelah TERBIT (§3) |
+| 6 | Bobot amaliyah | **15%** | Bobot default 35/25/25/15 (§5.6) |
+
+Pertanyaan yang masih terbuka (tidak menghalangi HR-1):
+- Siapa HR asli dan kapan dummy dihapus.
+- Pola kerja nyata tiap orang — diisi HR lewat editor jadwal setelah HR-1 rilis.
 
 ## 13. Risiko
 
@@ -337,6 +376,7 @@ Setiap fase: kerjakan → uji di DB salinan → deploy → commit. Jangan gabung
 |---|---|---|
 | Absen aplikasi berbasis kejujuran (bisa "Masuk Kantor" dari rumah) | Data kantor tidak bisa dipercaya penuh | Mulai dengan budaya + audit acak; opsi D1 (GPS/IP) bila perlu |
 | Tim merasa diawasi | Resistensi, data asal isi | Sosialisasi tujuan (keadilan & perencanaan, bukan hukuman); 1 bulan masa uji tanpa masuk raport |
-| Aturan jadwal tidak sesuai kenyataan | Banyak "telat/alpa" palsu | HR-1 wajib mengisi pola kerja nyata; pantau minggu pertama |
+| Aturan jadwal tidak sesuai kenyataan | Banyak "telat/alpa" palsu | HR mengisi jadwal dinamis tiap orang sebelum absen diwajibkan; masa uji 1 bulan tanpa masuk raport |
+| Data dummy tercampur data asli | Rekap/raport tim salah | Semua dummy bertanda `dummy: true`, dikecualikan dari laporan; skrip `--hapus` |
 | Skor raport dianggap mutlak | Keputusan SDM salah | Tampilkan komponen & cakupan data, bukan hanya angka total; penilaian atasan terpisah |
 | AI eksekutor mengubah aturan izin akses | Kebocoran data antar tim | Uji izin otomatis (roadmap A4) sebelum HR-1 |
