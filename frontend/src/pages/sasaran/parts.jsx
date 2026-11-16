@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Clock, Loader2, Pencil, Plus, Trash2, HelpCircle } from "lucide-react";
+import { Clock, Loader2, Pencil, Plus, Trash2, HelpCircle, Zap } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { formatApiErr } from "@/lib/AuthContext";
-import { ukuranCheckin, ukuranCheckins, ukuranCreate, ukuranUpdate, ukuranDelete, sasaranCreate, sasaranUpdate, sasaranDelete } from "@/lib/api";
+import { sasaranMetrik, ukuranCheckin, ukuranCheckins, ukuranCreate, ukuranUpdate, ukuranDelete, sasaranCreate, sasaranUpdate, sasaranDelete } from "@/lib/api";
 import { PersonSelect, PeopleSelect } from "@/pages/tasks/raci";
 
 export const STATUS = {
@@ -39,6 +39,12 @@ export const ISTILAH = {
   CHECKIN: { judul: "Check-in", isi: "Update rutin (idealnya tiap pekan) oleh PIC: realisasi terbaru, tingkat keyakinan, dan catatan singkat. Riwayatnya menjadi bahan evaluasi." },
   OWNER: { judul: "Owner", isi: "Penanggung jawab objective. Owner dan PIC boleh check-in; SPV dan kepala tim mengelola objective." },
   PIC: { judul: "PIC", isi: "Person in charge: orang yang memegang KR/KPI dan melakukan check-in." },
+  LAG: { judul: "Ukuran hasil (lag)", isi: "Angka hasil akhir yang ingin dicapai, mis. santri aktif atau tagihan terbayar. Penting, tapi baru bergerak setelah kerja berpekan-pekan — tidak bisa diubah langsung minggu ini." },
+  LEAD: { judul: "Ukuran proses (lead)", isi: "Angka kegiatan pekanan yang bisa dikendalikan tim dan diyakini mendorong ukuran hasil, mis. % lead yang sampai tahap discovery atau jumlah kelas tanpa guru. Rapat mingguan fokus menggerakkan angka ini." },
+  OTOMATIS: { judul: "Data otomatis", isi: "Angka diambil sendiri dari Dashboard Ruang Sanad setiap 6 jam, jadi PIC tidak perlu mengetik realisasi. PIC tetap check-in untuk mengisi keyakinan dan catatan (penyebab naik/turun)." },
+  RAPAT: { judul: "Rapat Target Mingguan", isi: "Rapat 45 menit tiap Selasa 09.00 dengan agenda tetap: papan skor, komitmen pekan lalu, isu, komitmen baru, nilai rapat. Tujuannya satu: memutuskan apa yang dikerjakan pekan ini agar angka bergerak." },
+  ISU: { judul: "Isu (IDS)", isi: "Masalah yang menghambat target. Dibahas dengan pola IDS: Identify (apa akar masalahnya), Discuss (bahas singkat), Solve (putuskan tindakan + siapa penanggung jawabnya). Isu tidak boleh ditutup tanpa keputusan." },
+  KOMITMEN: { judul: "Komitmen mingguan", isi: "Janji 1–2 tindakan konkret per orang untuk pekan ini yang menggerakkan ukuran proses. Otomatis menjadi tugas (R = orangnya, A = fasilitator, tenggat 6 hari) dan dilaporkan selesai/tidak di rapat berikutnya." },
   STATUS: { judul: "Status", isi: Object.values({ a: "On track = sesuai jalur", b: "At risk = perlu perhatian (70–90%)", c: "Off track = tertinggal (< 70%)", d: "No data = belum ada check-in" }).join(" · ") },
 };
 
@@ -94,6 +100,14 @@ export function sinceText(iso) {
   return d <= 0 ? "hari ini" : d === 1 ? "kemarin" : `${d} hari lalu`;
 }
 
+export function JenisTag({ jenis }) {
+  const lead = jenis === "LEAD";
+  return <span title={lead ? ISTILAH.LEAD.isi : ISTILAH.LAG.isi} className={`mr-1 inline-block rounded px-1 py-px text-[9px] font-bold uppercase tracking-wide ${lead ? "bg-sky-100 text-sky-800" : "bg-violet-100 text-violet-800"}`}>{lead ? "Proses" : "Hasil"}</span>;
+}
+export function OtomatisTag() {
+  return <span title={ISTILAH.OTOMATIS.isi} className="mr-1 inline-flex items-center gap-0.5 rounded bg-amber-50 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-amber-800"><Zap size={9} />Otomatis</span>;
+}
+
 export function UkuranRow({ u, canCheckin, canEdit, onCheckin, onEdit, compact = false }) {
   return (
     <div className="flex flex-col gap-1.5 rounded-lg border border-emerald-100 bg-white px-3 py-2.5" data-testid={`ukuran-${u.id}`}>
@@ -101,6 +115,7 @@ export function UkuranRow({ u, canCheckin, canEdit, onCheckin, onEdit, compact =
         <div className="min-w-0 flex-1">
           <p className="text-sm text-emerald-950">{u.nama}</p>
           <p className="mt-0.5 text-[11px] text-emerald-800/65">
+            <JenisTag jenis={u.jenis} />{u.sumber && <OtomatisTag />}
             {ARAH[u.arah] || "Naik ↑"} · PIC {u.pic?.nama || "–"}
             {u.mode === "progres" ? ` · baseline ${fmtAngka(u.awal, u.satuan)}` : ""}
             {" · "}<span className={u.perlu_update ? "font-semibold text-amber-700" : ""}><Clock size={10} className="mb-0.5 inline" /> check-in {sinceText(u.last_checkin_at)}</span>
@@ -135,11 +150,13 @@ export function CheckinDialog({ ukuran, open, onOpenChange, onSaved }) {
     ukuranCheckins(ukuran.id).then(setRiwayat).catch(() => setRiwayat([]));
   }, [open, ukuran]);
   if (!ukuran) return null;
+  const auto = !!ukuran.sumber;
   const save = async () => {
-    if (nilai === "" || isNaN(Number(String(nilai).replace(",", ".")))) return toast.error("Isi realisasi berupa angka");
+    if (!auto && (nilai === "" || isNaN(Number(String(nilai).replace(",", "."))))) return toast.error("Isi realisasi berupa angka");
+    if (auto && !catatan.trim()) return toast.error("Angka sudah otomatis — isi catatan: apa penyebab naik/turunnya?");
     setBusy(true);
     try {
-      const u = await ukuranCheckin(ukuran.id, { nilai: Number(String(nilai).replace(",", ".")), confidence: yakin, catatan });
+      const u = await ukuranCheckin(ukuran.id, { nilai: auto ? null : Number(String(nilai).replace(",", ".")), confidence: yakin, catatan });
       toast.success(`Check-in tersimpan · ${STATUS[u.status]?.label || ""}`); onOpenChange(false); onSaved?.(u);
     } catch (e) { toast.error(formatApiErr(e)); }
     setBusy(false);
@@ -153,10 +170,15 @@ export function CheckinDialog({ ukuran, open, onOpenChange, onSaved }) {
         </DialogHeader>
         <div className="space-y-3">
           <p className="text-xs text-emerald-800/70">Target: <b>{fmtAngka(ukuran.target, ukuran.satuan)}</b> · polaritas {ARAH[ukuran.arah]} · realisasi terakhir: {fmtAngka(ukuran.capaian, ukuran.satuan)}</p>
-          <div>
+          {auto ? (
+            <div className="rounded-md border border-amber-200 bg-amber-50/60 p-2.5 text-xs text-amber-900" data-testid="ck-auto">
+              <p className="font-semibold"><Zap size={12} className="mb-0.5 inline" /> Realisasi otomatis dari Dashboard: {fmtAngka(ukuran.capaian, ukuran.satuan)}</p>
+              <p className="mt-0.5 text-amber-900/80">Anda cukup mengisi keyakinan dan catatan penyebab (wajib).</p>
+            </div>
+          ) : <div>
             <label className="text-xs font-medium text-emerald-900" htmlFor="ck-nilai">Realisasi saat ini {ukuran.satuan ? `(${ukuran.satuan === "Rp" ? "rupiah, angka penuh" : ukuran.satuan})` : ""}</label>
             <Input id="ck-nilai" inputMode="decimal" value={nilai} onChange={(e) => setNilai(e.target.value)} data-testid="ck-nilai" />
-          </div>
+          </div>}
           <div>
             <p className="mb-1 text-xs font-medium text-emerald-900">Seberapa yakin target tercapai?</p>
             <div className="grid grid-cols-3 gap-1.5">
@@ -167,7 +189,7 @@ export function CheckinDialog({ ukuran, open, onOpenChange, onSaved }) {
             </div>
           </div>
           <div>
-            <label className="text-xs font-medium text-emerald-900" htmlFor="ck-catatan">Catatan singkat <span className="text-emerald-700/50">(opsional)</span></label>
+            <label className="text-xs font-medium text-emerald-900" htmlFor="ck-catatan">Catatan singkat <span className="text-emerald-700/50">{auto ? "(wajib)" : "(opsional)"}</span></label>
             <Textarea id="ck-catatan" rows={2} value={catatan} onChange={(e) => setCatatan(e.target.value)} placeholder="Apa yang berubah pekan ini? Ada kendala?" maxLength={500} />
           </div>
           {riwayat.length > 0 && (
@@ -197,17 +219,28 @@ export function UkuranDialog({ open, onOpenChange, sasaran, ukuran, anggotaAll, 
   const edit = !!ukuran;
   const [f, setF] = useState({});
   const [busy, setBusy] = useState(false);
+  const [metrik, setMetrik] = useState([]);
   useEffect(() => {
     if (!open) return;
-    setF(ukuran ? { nama: ukuran.nama, pic_id: ukuran.pic_id, arah: ukuran.arah || "NAIK", satuan: ukuran.satuan || "", awal: ukuran.awal ?? "", target: ukuran.target ?? "" }
-      : { nama: "", pic_id: sasaran?.pj_id || null, arah: "NAIK", satuan: "%", awal: "", target: "" });
+    setF(ukuran ? { nama: ukuran.nama, pic_id: ukuran.pic_id, arah: ukuran.arah || "NAIK", satuan: ukuran.satuan || "", awal: ukuran.awal ?? "", target: ukuran.target ?? "",
+      jenis: ukuran.jenis || "LAG", sumber: ukuran.sumber || "", untuk_ukuran_id: ukuran.untuk_ukuran_id || "" }
+      : { nama: "", pic_id: sasaran?.pj_id || null, arah: "NAIK", satuan: "%", awal: "", target: "", jenis: "LAG", sumber: "", untuk_ukuran_id: "" });
+    sasaranMetrik().then((r) => setMetrik(r.metrik || [])).catch(() => setMetrik([]));
   }, [open, ukuran, sasaran]);
+  const pilihSumber = (key) => {
+    const m = metrik.find((x) => x.key === key);
+    if (!m) return setF({ ...f, sumber: "" });
+    setF({ ...f, sumber: key, satuan: m.satuan, arah: m.arah, jenis: m.jenis, nama: f.nama?.trim() ? f.nama : m.label, awal: f.awal === "" && m.nilai != null && !edit ? m.nilai : f.awal });
+  };
+  const mSel = metrik.find((x) => x.key === f.sumber);
+  const lagList = (sasaran?.ukuran || []).filter((x) => x.id !== ukuran?.id && (x.jenis || "LAG") === "LAG");
   const num = (v) => (v === "" || v === null || v === undefined ? null : Number(String(v).replace(",", ".")));
   const save = async () => {
     if (!f.nama?.trim()) return toast.error("Isi Key Result");
     if (num(f.target) === null || isNaN(num(f.target))) return toast.error("Target harus angka");
     if (f.awal !== "" && isNaN(num(f.awal))) return toast.error("Baseline harus angka");
-    const p = { nama: f.nama.trim(), pic_id: f.pic_id, arah: f.arah, satuan: f.satuan, awal: num(f.awal), target: num(f.target) };
+    const p = { nama: f.nama.trim(), pic_id: f.pic_id, arah: f.arah, satuan: f.satuan, awal: num(f.awal), target: num(f.target),
+      jenis: f.jenis, sumber: f.sumber || null, untuk_ukuran_id: f.jenis === "LEAD" ? (f.untuk_ukuran_id || null) : null };
     setBusy(true);
     try { edit ? await ukuranUpdate(ukuran.id, p) : await ukuranCreate(sasaran.id, p); toast.success("Key Result disimpan"); onOpenChange(false); onSaved?.(); }
     catch (e) { toast.error(formatApiErr(e)); }
@@ -226,6 +259,27 @@ export function UkuranDialog({ open, onOpenChange, sasaran, ukuran, anggotaAll, 
         <div className="space-y-3">
           <div><label className="text-xs font-medium text-emerald-900" htmlFor="uk-nama">Key Result</label>
             <Input id="uk-nama" value={f.nama || ""} onChange={(e) => setF({ ...f, nama: e.target.value })} placeholder="mis. Jumlah santri aktif" /></div>
+          <div><label className="text-xs font-medium text-emerald-900" htmlFor="uk-sumber">Sumber angka <InfoTip k="OTOMATIS" /></label>
+            <select id="uk-sumber" value={f.sumber || ""} onChange={(e) => pilihSumber(e.target.value)} data-testid="uk-sumber" className="h-9 w-full rounded-md border border-input bg-white px-2 text-sm">
+              <option value="">Manual — PIC mengetik realisasi saat check-in</option>
+              {metrik.map((m) => <option key={m.key} value={m.key}>Otomatis: {m.label}{m.nilai != null ? ` (sekarang ${fmtAngka(m.nilai, m.satuan)})` : ""}</option>)}
+            </select>
+            {mSel && <p className="mt-1 text-[11px] text-emerald-800/60">{mSel.penjelasan} Diperbarui otomatis tiap 6 jam.</p>}</div>
+          <p className="-mb-1 text-xs font-medium text-emerald-900">Jenis ukuran</p>
+          <div className="grid grid-cols-2 gap-1.5">
+            {[["LAG", "Hasil (lag)", "Angka akhir yang dikejar"], ["LEAD", "Proses (lead)", "Kegiatan pekanan pendorongnya"]].map(([k, l, d]) => (
+              <button key={k} type="button" onClick={() => setF({ ...f, jenis: k })} data-testid={`jenis-${k}`}
+                className={`rounded-md border px-2 py-1.5 text-left text-xs ${f.jenis === k ? "border-emerald-800 bg-emerald-800 text-white" : "border-emerald-200 text-emerald-900 hover:bg-emerald-50"}`}>
+                <b>{l}</b> <InfoTip k={k} className={f.jenis === k ? "text-white/80" : ""} /><br /><span className="opacity-75">{d}</span></button>
+            ))}
+          </div>
+          {f.jenis === "LEAD" && lagList.length > 0 && (
+            <div><label className="text-xs font-medium text-emerald-900" htmlFor="uk-untuk">Mendorong ukuran hasil</label>
+              <select id="uk-untuk" value={f.untuk_ukuran_id || ""} onChange={(e) => setF({ ...f, untuk_ukuran_id: e.target.value })} className="h-9 w-full rounded-md border border-input bg-white px-2 text-sm">
+                <option value="">(tidak ditautkan)</option>
+                {lagList.map((x) => <option key={x.id} value={x.id}>{x.nama}</option>)}
+              </select></div>
+          )}
           <p className="-mb-1 text-xs font-medium text-emerald-900">Polaritas <InfoTip k="POLARITAS" /></p>
           <div className="grid grid-cols-3 gap-1.5">
             {Object.entries(ARAH).map(([k, l]) => (

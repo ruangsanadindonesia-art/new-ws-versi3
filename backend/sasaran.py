@@ -97,6 +97,9 @@ def build_sasaran_router(db, get_current_user, user_scope) -> APIRouter:
         satuan: str = ""
         awal: Optional[float] = None
         target: float
+        jenis: str = "LAG"                     # LAG = hasil, LEAD = proses yang dikerjakan tiap pekan
+        sumber: Optional[str] = None           # kunci metrik Dashboard (otomatis) atau None (manual)
+        untuk_ukuran_id: Optional[str] = None  # LEAD ini menggerakkan KR hasil yang mana
 
     class UkuranUpd(BaseModel):
         model_config = ConfigDict(extra="ignore")
@@ -107,9 +110,12 @@ def build_sasaran_router(db, get_current_user, user_scope) -> APIRouter:
         awal: Optional[float] = None
         target: Optional[float] = None
         urutan: Optional[int] = None
+        jenis: Optional[str] = None
+        sumber: Optional[str] = None
+        untuk_ukuran_id: Optional[str] = None
 
     class CheckinIn(BaseModel):
-        nilai: float
+        nilai: Optional[float] = None  # wajib untuk KR manual; KR otomatis memakai angka Dashboard
         confidence: str = "YAKIN"
         catatan: str = Field(default="", max_length=500)
 
@@ -234,8 +240,13 @@ def build_sasaran_router(db, get_current_user, user_scope) -> APIRouter:
             raise HTTPException(400, "Sasaran tim wajib memilih tim.")
 
     def _validate_u(data: dict):
+        from dashboard_sync import METRIK
         if data.get("arah") and data["arah"] not in ARAH:
             raise HTTPException(400, "Arah harus NAIK, TURUN, atau JAGA.")
+        if data.get("jenis") and data["jenis"] not in ("LAG", "LEAD"):
+            raise HTTPException(400, "Jenis harus LAG (hasil) atau LEAD (proses).")
+        if data.get("sumber") and data["sumber"] not in METRIK:
+            raise HTTPException(400, "Sumber data otomatis tidak dikenal.")
 
     def _decorate_u(u: dict, expected: float, ang: dict) -> dict:
         pct = _pct(u)
@@ -465,9 +476,10 @@ def build_sasaran_router(db, get_current_user, user_scope) -> APIRouter:
         data = payload.model_dump()
         _validate_u(data)
         n = await db.ukuran.count_documents({"sasaran_id": sid})
+        snap = await db.metric_snapshots.find_one({"key": data["sumber"]}, sort=[("tanggal", -1)]) if data.get("sumber") else None
         doc = {**data, "id": str(uuid.uuid4()), "sasaran_id": sid, "period_id": s["period_id"],
-               "pic_id": data.get("pic_id") or s.get("pj_id"), "capaian": None, "confidence": None,
-               "last_checkin_at": None, "urutan": n + 1, "created_at": _now()}
+               "pic_id": data.get("pic_id") or s.get("pj_id"), "capaian": snap["nilai"] if snap else None, "confidence": None,
+               "last_checkin_at": snap["at"] if snap else None, "urutan": n + 1, "created_at": _now()}
         await db.ukuran.insert_one(doc)
         doc.pop("_id", None)
         return doc
@@ -485,6 +497,10 @@ def build_sasaran_router(db, get_current_user, user_scope) -> APIRouter:
         await _require_edit(user, s)
         upd = payload.model_dump(exclude_unset=True)
         _validate_u(upd)
+        if upd.get("sumber") and upd["sumber"] != u.get("sumber"):
+            snap = await db.metric_snapshots.find_one({"key": upd["sumber"]}, sort=[("tanggal", -1)])
+            if snap:
+                upd.update({"capaian": snap["nilai"], "last_checkin_at": snap["at"]})
         return await db.ukuran.find_one_and_update({"id": uid}, {"$set": upd}, return_document=True, projection={"_id": 0})
 
     @router.delete("/ukuran/{uid}")
@@ -504,6 +520,12 @@ def build_sasaran_router(db, get_current_user, user_scope) -> APIRouter:
             raise HTTPException(403, "Check-in hanya oleh PIC ukuran, penanggung jawab sasaran, kepala tim, atau SPV.")
         if payload.confidence not in CONFIDENCE:
             raise HTTPException(400, "Keyakinan harus YAKIN, RAGU, atau BERISIKO.")
+        if u.get("sumber"):
+            if u.get("capaian") is None:
+                raise HTTPException(400, "Angka otomatis belum tersedia. Tunggu sinkron Dashboard berikutnya.")
+            payload.nilai = u["capaian"]  # angka otomatis tidak bisa diubah manual
+        elif payload.nilai is None:
+            raise HTTPException(400, "Isi realisasi berupa angka.")
         now = _now()
         await db.ukuran_checkins.insert_one({"id": str(uuid.uuid4()), "ukuran_id": uid, "nilai": payload.nilai,
                                              "confidence": payload.confidence, "catatan": payload.catatan.strip(),
@@ -522,6 +544,101 @@ def build_sasaran_router(db, get_current_user, user_scope) -> APIRouter:
     @router.get("/ukuran/{uid}/checkins")
     async def checkins(uid: str, _: dict = Depends(get_current_user)):
         return await db.ukuran_checkins.find({"ukuran_id": uid}, {"_id": 0}).sort("at", 1).to_list(500)
+
+    # ------------------------------------------------------------ data otomatis Dashboard
+    @router.get("/metrik")
+    async def metrik(_: dict = Depends(get_current_user)):
+        from dashboard_sync import katalog
+        out = []
+        for m in katalog():
+            snap = await db.metric_snapshots.find_one({"key": m["key"]}, {"_id": 0}, sort=[("tanggal", -1)])
+            out.append({**m, "nilai": snap["nilai"] if snap else None, "tanggal": snap["tanggal"] if snap else None})
+        last = await db.dashboard_sync_log.find_one({}, {"_id": 0}, sort=[("at", -1)])
+        return {"metrik": out, "sinkron_terakhir": last}
+
+    @router.post("/metrik/sync")
+    async def metrik_sync(user: dict = Depends(get_current_user)):
+        if not (await user_scope(user))["is_spv"]:
+            raise HTTPException(403, "Hanya SPV.")
+        from dashboard_sync import sync
+        return await sync(db, actor="Sinkron Dashboard (manual)")
+
+    # ------------------------------------------------------------ papan skor (13 pekan)
+    def _iso_week(d: date) -> str:
+        y, w, _ = d.isocalendar()
+        return f"{y}-W{w:02d}"
+
+    @router.get("/papan")
+    async def papan(period_id: Optional[str] = None, user: dict = Depends(get_current_user)):
+        if not period_id:
+            p = await db.strategy_periods.find_one({"active": True}, {"_id": 0, "id": 1})
+            if not p:
+                return {"period": None, "baris": []}
+            period_id = p["id"]
+        ov = await _overview(period_id, user)
+        today = date.today()
+        weeks = [_iso_week(today - timedelta(weeks=i)) for i in range(12, -1, -1)]
+        monday = today - timedelta(days=today.weekday())
+        from dashboard_sync import METRIK
+        rows = []
+        for s in ov["sasaran"]:
+            for u in s["ukuran"]:
+                hist = await db.ukuran_checkins.find({"ukuran_id": u["id"]}, {"_id": 0, "nilai": 1, "at": 1}).sort("at", 1).to_list(1000)
+                per_week = {}
+                for c in hist:
+                    try:
+                        d = datetime.fromisoformat(str(c["at"]).replace("Z", "+00:00")).date()
+                    except Exception:
+                        continue
+                    per_week[_iso_week(d)] = c["nilai"]
+                if u.get("sumber"):  # riwayat harian Dashboard melengkapi tren
+                    async for sn in db.metric_snapshots.find({"key": u["sumber"]}, {"_id": 0, "tanggal": 1, "nilai": 1}).sort("tanggal", 1):
+                        per_week[_iso_week(date.fromisoformat(sn["tanggal"]))] = sn["nilai"]
+                before = [c for c in hist if str(c["at"])[:10] < monday.isoformat()]
+                pekan_lalu = before[-1]["nilai"] if before else None
+                rows.append({
+                    "id": u["id"], "nama": u["nama"], "jenis": u.get("jenis") or "LAG", "sumber": u.get("sumber"),
+                    "sumber_label": METRIK[u["sumber"]][0] if u.get("sumber") in METRIK else None,
+                    "untuk_ukuran_id": u.get("untuk_ukuran_id"), "pic": u.get("pic"), "pic_id": u.get("pic_id"),
+                    "arah": u.get("arah"), "satuan": u.get("satuan"), "awal": u.get("awal"), "target": u.get("target"),
+                    "capaian": u.get("capaian"), "pekan_lalu": pekan_lalu, "pct": u.get("pct"), "status": u["status"],
+                    "perlu_update": u["perlu_update"] and not u.get("sumber"), "confidence": u.get("confidence"),
+                    "catatan_terakhir": u.get("catatan_terakhir"), "last_checkin_at": u.get("last_checkin_at"),
+                    "sasaran_id": s["id"], "sasaran_judul": s["judul"], "sasaran_level": s["level"],
+                    "tim": (s.get("divisi") or {}).get("nama"), "pj_id": s.get("pj_id"), "divisi_id": s.get("divisi_id"),
+                    "tren": [{"minggu": w, "nilai": per_week.get(w)} for w in weeks],
+                })
+        last = await db.dashboard_sync_log.find_one({"ok": True}, {"_id": 0}, sort=[("at", -1)])
+        return {"period": ov["period"], "expected_pct": ov["expected_pct"], "baris": rows, "minggu": weeks,
+                "sinkron_terakhir": last, "is_spv": ov["is_spv"], "head_divisi_id": ov["head_divisi_id"]}
+
+    # ------------------------------------------------------------ pengaturan ritme
+    class PengaturanIn(BaseModel):
+        model_config = ConfigDict(extra="ignore")
+        fasilitator_id: Optional[str] = None
+        hari_rapat: Optional[str] = None      # SENIN..JUMAT
+        jam_rapat: Optional[str] = None       # "09:00"
+        durasi_menit: Optional[int] = None
+        batas_checkin: Optional[str] = None   # teks, mis. "Senin 17.00"
+
+    DEFAULT_RITME = {"fasilitator_id": None, "hari_rapat": "SELASA", "jam_rapat": "09:00", "durasi_menit": 45, "batas_checkin": "Senin 17.00"}
+
+    @router.get("/pengaturan")
+    async def get_pengaturan(_: dict = Depends(get_current_user)):
+        d = await db.target_settings.find_one({"id": "ritme"}, {"_id": 0}) or {}
+        out = {**DEFAULT_RITME, **d}
+        if out.get("fasilitator_id"):
+            a = await db.anggota.find_one({"id": out["fasilitator_id"]}, {"_id": 0, "nama": 1})
+            out["fasilitator_nama"] = a["nama"] if a else None
+        return out
+
+    @router.put("/pengaturan")
+    async def put_pengaturan(payload: PengaturanIn, user: dict = Depends(get_current_user)):
+        if not (await user_scope(user))["is_spv"]:
+            raise HTTPException(403, "Hanya SPV.")
+        upd = payload.model_dump(exclude_unset=True)
+        await db.target_settings.update_one({"id": "ritme"}, {"$set": {**upd, "id": "ritme", "updated_at": _now()}}, upsert=True)
+        return await get_pengaturan(user)
 
     # ------------------------------------------------------------ evaluasi, visi, PDF
     @router.get("/evaluasi")
@@ -576,5 +693,6 @@ def build_sasaran_router(db, get_current_user, user_scope) -> APIRouter:
         return StreamingResponse(io.BytesIO(buf), media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
     router.do_checkin = do_checkin  # dipakai tool MCP
+    router.papan_fn = papan
     router.overview_fn = _overview
     return router

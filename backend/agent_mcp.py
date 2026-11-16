@@ -271,17 +271,17 @@ def build_mcp_router(srv) -> APIRouter:
         await srv.add_comment(a["task_id"], srv.CommentPayload(text=a["teks"]), ctx["actor"])
         return {"ok": True}
 
-    @tool("check_in_ukuran", "Check-in realisasi terbaru sebuah KPI/Key Result (saya PIC). keyakinan: YAKIN, RAGU, atau BERISIKO. Ambil id dari sasaran_saya.",
+    @tool("check_in_ukuran", "Check-in realisasi terbaru sebuah KPI/Key Result (saya PIC). Untuk ukuran otomatis (sumber dashboard) nilai diabaikan; cukup keyakinan + catatan. keyakinan: YAKIN, RAGU, atau BERISIKO. Ambil id dari sasaran_saya.",
           {"ukuran_id": {"type": "string"}, "nilai": {"type": "number"}, "keyakinan": {"type": "string", "enum": ["YAKIN", "RAGU", "BERISIKO"]},
-           "catatan": {"type": "string", "maxLength": 500}}, ["ukuran_id", "nilai"], write=True)
+           "catatan": {"type": "string", "maxLength": 500}}, ["ukuran_id"], write=True)
     async def t_checkin(user, ctx, a):
         from sasaran import build_sasaran_router  # noqa: F401  (model CheckinIn ada di router)
         from pydantic import BaseModel
         class _C(BaseModel):
-            nilai: float
+            nilai: Optional[float] = None
             confidence: str = "YAKIN"
             catatan: str = ""
-        u = await srv.sasaran_router.do_checkin(a["ukuran_id"], _C(nilai=a["nilai"], confidence=a.get("keyakinan", "YAKIN"), catatan=a.get("catatan", "")), ctx["actor"])
+        u = await srv.sasaran_router.do_checkin(a["ukuran_id"], _C(nilai=a.get("nilai"), confidence=a.get("keyakinan", "YAKIN"), catatan=a.get("catatan", "")), ctx["actor"])
         return {"ok": True, "ukuran": u["nama"], "capaian": u.get("capaian"), "status": u["status"], "pct": u.get("pct")}
 
     @tool("centang_amaliyah", "Centang (atau batalkan) amaliyah saya untuk tanggal tertentu (default hari ini).",

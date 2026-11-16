@@ -222,3 +222,16 @@ export const sasaranVisi = () => api.get("/sasaran/visi").then((r) => r.data);
 export const sasaranSaveVisi = (p) => api.put("/sasaran/visi", p).then((r) => r.data);
 export const sasaranPdf = (jenis, period_id, divisi_id) =>
   api.get(`/sasaran/pdf/${jenis}`, { params: { period_id, ...(divisi_id ? { divisi_id } : {}) }, responseType: "blob" }).then((r) => r.data);
+// Papan skor, data otomatis Dashboard, ritme rapat target
+export const sasaranPapan = (period_id) => api.get("/sasaran/papan", { params: period_id ? { period_id } : {} }).then((r) => r.data);
+export const sasaranMetrik = () => api.get("/sasaran/metrik").then((r) => r.data);
+export const sasaranSyncMetrik = () => api.post("/sasaran/metrik/sync").then((r) => r.data);
+export const ritmePengaturan = () => api.get("/sasaran/pengaturan").then((r) => r.data);
+export const ritmeSimpanPengaturan = (p) => api.put("/sasaran/pengaturan", p).then((r) => r.data);
+export const rapatList = () => api.get("/ritme/rapat").then((r) => r.data);
+export const rapatMulai = (p = {}) => api.post("/ritme/rapat", p).then((r) => r.data);
+export const rapatDetail = (id) => api.get(`/ritme/rapat/${id}`).then((r) => r.data);
+export const rapatKomitmen = (id, p) => api.post(`/ritme/rapat/${id}/komitmen`, p).then((r) => r.data);
+export const rapatSelesai = (id, p) => api.post(`/ritme/rapat/${id}/selesai`, p).then((r) => r.data);
+export const isuTambah = (p) => api.post("/ritme/isu", p).then((r) => r.data);
+export const isuUbah = (id, p, rapat_id) => api.put(`/ritme/isu/${id}`, p, { params: rapat_id ? { rapat_id } : {} }).then((r) => r.data);

@@ -15,20 +15,26 @@ import {
 } from "@/lib/api";
 import { StatusPill, ProgressBar, UkuranRow, CheckinDialog, UkuranDialog, SasaranSheet, PERSPEKTIF, PERSPEKTIF_ARTI, STATUS, InfoTip, ISTILAH } from "@/pages/sasaran/parts";
 import EvaluasiSasaran from "@/pages/sasaran/Evaluasi";
+import PapanSkor from "@/pages/sasaran/PapanSkor";
+import RapatMingguan from "@/pages/sasaran/Rapat";
+import Panduan from "@/pages/sasaran/Panduan";
 
 // Satu data (Objective → Key Result → Tugas), beberapa sudut pandang manajemen.
 const TABS = [
+  { k: "papan", label: "Papan Skor", hint: "Semua angka target dalam satu tabel: sekarang vs pekan lalu, tren 13 pekan, status" },
+  { k: "rapat", label: "Rapat Mingguan", hint: ISTILAH.RAPAT.isi },
   { k: "ringkasan", label: "Dashboard", hint: "Ringkasan kondisi target periode ini" },
   { k: "bsc", label: "BSC", hint: ISTILAH.BSC.isi },
   { k: "sasaran", label: "OKR", hint: ISTILAH.OKR.isi },
   { k: "kpi", label: "KPI", hint: ISTILAH.KPI.isi },
   { k: "evaluasi", label: "Evaluasi", hint: "Rekap akhir periode, catatan SPV, PDF Komitmen & Evaluasi" },
+  { k: "panduan", label: "Panduan", hint: "Siapa melakukan apa, kapan, dan bagaimana" },
 ];
 
 export default function Sasaran() {
   const { user } = useAuth();
   const [params, setParams] = useSearchParams();
-  const tab = TABS.some((t) => t.k === params.get("tab")) ? params.get("tab") : "ringkasan";
+  const tab = TABS.some((t) => t.k === params.get("tab")) ? params.get("tab") : "papan";
   const [periods, setPeriods] = useState([]);
   const [periodId, setPeriodId] = useState(null);
   const [ov, setOv] = useState(null);
@@ -40,6 +46,7 @@ export default function Sasaran() {
   const [sheet, setSheet] = useState(null); // {sasaran?} | null
   const [periodDlg, setPeriodDlg] = useState(false);
   const [visiDlg, setVisiDlg] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   const load = async (pid = periodId) => {
     try {
@@ -100,18 +107,22 @@ export default function Sasaran() {
         )}
       </div>
 
-      <PageTabs tabs={TABS} value={tab} onChange={(k) => setParams(k === "ringkasan" ? {} : { tab: k })} />
+      <PageTabs tabs={TABS} value={tab} onChange={(k) => setParams(k === "papan" ? {} : { tab: k })} />
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-emerald-800/70" data-testid="glosarium">
         <span>Apa itu:</span>
-        {["BSC", "OKR", "KPI", "KR", "BASELINE", "POLARITAS", "CHECKIN", "STATUS"].map((k) => (
-          <span key={k} className="inline-flex items-center gap-0.5">{({ KR: "Key Result", BASELINE: "Baseline", POLARITAS: "Polaritas", CHECKIN: "Check-in", STATUS: "Status" })[k] || k}<InfoTip k={k} /></span>
+        {["BSC", "OKR", "KPI", "KR", "LAG", "LEAD", "BASELINE", "POLARITAS", "CHECKIN", "STATUS"].map((k) => (
+          <span key={k} className="inline-flex items-center gap-0.5">{({ KR: "Key Result", LAG: "Hasil", LEAD: "Proses", BASELINE: "Baseline", POLARITAS: "Polaritas", CHECKIN: "Check-in", STATUS: "Status" })[k] || k}<InfoTip k={k} /></span>
         ))}
       </div>
 
-      {!period ? (
+      {tab === "panduan" ? <Panduan /> : !period ? (
         <div className="rounded-xl border border-dashed border-emerald-200 bg-white p-8 text-center text-sm text-emerald-800/70">
           Belum ada periode aktif. {isSpv ? "Buat periode lewat tombol Periode." : "Minta SPV membuat periode."}
         </div>
+      ) : tab === "papan" ? (
+        <PapanSkor periodId={period.id} me={me} onCheckin={setCheckinU} reloadKey={reloadKey} />
+      ) : tab === "rapat" ? (
+        <RapatMingguan isSpv={isSpv} anggotaAll={anggotaAll} divisiList={divisiList} sasaranList={ov.sasaran} />
       ) : tab === "ringkasan" ? (
         <Ringkasan ov={ov} visi={visi} canCheckin={canCheckin} sById={sById} onCheckin={setCheckinU} onOpen={() => setParams({ tab: "sasaran" })} />
       ) : tab === "bsc" ? (
@@ -126,7 +137,7 @@ export default function Sasaran() {
         <EvaluasiSasaran periodId={period.id} isSpv={isSpv} divisiList={divisiList} />
       )}
 
-      <CheckinDialog ukuran={checkinU} open={!!checkinU} onOpenChange={(v) => !v && setCheckinU(null)} onSaved={() => load(periodId)} />
+      <CheckinDialog ukuran={checkinU} open={!!checkinU} onOpenChange={(v) => !v && setCheckinU(null)} onSaved={() => { load(periodId); setReloadKey((x) => x + 1); }} />
       <UkuranDialog open={!!ukuranEdit} onOpenChange={(v) => !v && setUkuranEdit(null)} sasaran={ukuranEdit?.sasaran} ukuran={ukuranEdit?.ukuran}
         anggotaAll={anggotaAll} divisiList={divisiList} onSaved={() => load(periodId)} />
       <SasaranSheet open={!!sheet} onOpenChange={(v) => !v && setSheet(null)} sasaran={sheet?.sasaran} periodId={periodId} ov={ov}

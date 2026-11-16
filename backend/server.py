@@ -2137,6 +2137,8 @@ api_router.include_router(sasaran_router)
 import sys as _sys
 from agent_mcp import build_mcp_router
 api_router.include_router(build_mcp_router(_sys.modules[__name__]))
+from ritme import build_ritme_router
+api_router.include_router(build_ritme_router(_sys.modules[__name__]))
 
 # Include router
 app.include_router(api_router)
@@ -2175,8 +2177,16 @@ async def on_startup():
         await db.ukuran.create_index([("period_id", 1), ("pic_id", 1)])
         await db.ukuran_checkins.create_index([("ukuran_id", 1), ("at", 1)])
         await db.tasks.create_index("sasaran_id")
+        await db.tasks.create_index("komitmen_rapat_id", sparse=True)
+        await db.metric_snapshots.create_index([("key", 1), ("tanggal", 1)], unique=True)
+        await db.rapat_target.create_index([("period_id", 1), ("minggu", 1)], unique=True)
+        await db.isu_target.create_index([("period_id", 1), ("status", 1)])
     except Exception:
         pass
+    import asyncio as _aio
+    import dashboard_sync
+    if os.environ.get("DASHBOARD_MCP_KEY") and os.environ.get("DASHBOARD_SYNC", "1") == "1":
+        app.state.dash_sync = _aio.create_task(dashboard_sync.loop(db))
     # Migrate existing amaliyah_entries without user_id → assign to first SPV
     spv = await db.users.find_one({"role": "spv", "status": "approved"}, {"_id": 0})
     if spv:
