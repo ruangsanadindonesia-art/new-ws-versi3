@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import NotificationBell from "@/components/NotificationBell";
-import { ListTodo, HeartHandshake, BarChart3, Settings, Menu, X, LogOut, ShieldCheck, Users } from "lucide-react";
+import { ListTodo, HeartHandshake, BarChart3, Settings, Menu, X, LogOut, ShieldCheck, Users, Target } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 import { unreadTasks } from "@/lib/api";
@@ -9,16 +9,17 @@ import { useAuth } from "@/lib/AuthContext";
 import GlobalSearch from "@/components/GlobalSearch";
 import SanadLogo from "@/components/SanadLogo";
 
-// 4 menu utama. Halaman lama (/raport, /monitoring, /strategy, /users, /spiritual, /tugas-rutin, /profile)
+// 5 menu utama. Halaman lama (/raport, /monitoring, /users, /spiritual, /tugas-rutin, /profile)
 // tetap bisa dibuka lewat tautan/bookmark, tapi tidak tampil di menu.
 const NAV = [
   { to: "/tasks", label: "Tugas", icon: ListTodo, testId: "nav-tasks", badgeKey: "tasks" },
   { to: "/harian", label: "Harian Saya", icon: HeartHandshake, testId: "nav-harian" },
+  { to: "/sasaran", label: "Sasaran", icon: Target, testId: "nav-sasaran" },
   { to: "/laporan", label: "Laporan", icon: BarChart3, testId: "nav-laporan" },
   { to: "/pengaturan", label: "Pengaturan", icon: Settings, testId: "nav-pengaturan" },
 ];
 const HIDDEN_TITLES = [
-  ["/beranda", "Beranda"], ["/raport", "Raport"], ["/monitoring", "Monitoring"], ["/strategy", "Strategi & Eksekusi"],
+  ["/beranda", "Beranda"], ["/raport", "Raport"], ["/monitoring", "Monitoring"],
   ["/users", "Manajemen User"], ["/spiritual", "Spiritual Tracker"], ["/tugas-rutin", "Tugas Rutin Tracker"], ["/profile", "Profil"],
 ];
 

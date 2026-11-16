@@ -181,6 +181,7 @@ class TaskBase(BaseModel):
     # RACI: R = penerima_tugas_id, A = pemberi_id, C/I = daftar anggota_id
     consulted_ids: List[str] = Field(default_factory=list)
     informed_ids: List[str] = Field(default_factory=list)
+    sasaran_id: Optional[str] = None  # tugas ini mendukung sasaran mana (modul Sasaran)
 
 
 class Task(TaskBase):
@@ -223,6 +224,7 @@ class TaskUpdate(BaseModel):
     moved_at: Optional[str] = None
     consulted_ids: Optional[List[str]] = None
     informed_ids: Optional[List[str]] = None
+    sasaran_id: Optional[str] = None
 
 
 class MoveTaskPayload(BaseModel):
@@ -411,7 +413,7 @@ async def root():
 RACI_FIELD = {"R": "penerima_tugas_id", "A": "pemberi_id", "C": "consulted_ids", "I": "informed_ids"}
 # Field yang boleh diubah tiap peran (SPV boleh semua). Field lain dari form dibuang diam-diam.
 FIELDS_A = {"nama", "kategori", "tanggal_mulai", "deadline", "label_ids", "brief_link", "catatan_tim",
-            "penerima_tugas_id", "pemberi_id", "consulted_ids", "informed_ids", "kategori_id"}
+            "penerima_tugas_id", "pemberi_id", "consulted_ids", "informed_ids", "kategori_id", "sasaran_id"}
 FIELDS_R = {"status", "list_id", "urutan", "hasil_link", "hasil_catatan", "label_ids", "tanggal_mulai"}
 # catatan_tim = "Instruksi" dari A; catatan R ada di hasil_catatan & komentar.
 
@@ -680,6 +682,11 @@ async def update_task(task_id: str, payload: TaskUpdate, user: dict = Depends(ge
             raise HTTPException(403, "Peran Anda di tugas ini Consulted/Informed — hanya bisa melihat" + (" dan berkomentar." if "C" in roles else "."))
         # Form mengirim semua field; buang diam-diam field di luar wewenang peran.
         update = {k: v for k, v in update.items() if k in allowed}
+    if "sasaran_id" in update:
+        if update["sasaran_id"] in ("", "none"):
+            update["sasaran_id"] = None
+        elif not await db.sasaran.find_one({"id": update["sasaran_id"]}, {"_id": 1}):
+            raise HTTPException(400, "Sasaran tidak ditemukan.")
     for k in ("penerima_tugas_id", "pemberi_id"):
         if k in update and not await db.anggota.find_one({"id": update[k]}, {"_id": 1}):
             raise HTTPException(400, "Anggota R/A tidak ditemukan.")
@@ -1127,10 +1134,19 @@ async def notifications_feed(user: dict = Depends(get_current_user)):
         perlu_review = await db.tasks.count_documents({"status": "MENUNGGU_REVIEW", "archived": {"$ne": True}})
     elif scope["anggota_id"]:
         perlu_review = await db.tasks.count_documents({"status": "MENUNGGU_REVIEW", "archived": {"$ne": True}, "pemberi_id": scope["anggota_id"]})
-    count = len(delegated) + urgent + approvals + len(aktivitas)
+    checkin_perlu = []
+    if scope["anggota_id"]:
+        ap = await db.strategy_periods.find_one({"active": True}, {"_id": 0, "id": 1})
+        if ap:
+            batas = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+            rows = await db.ukuran.find({"period_id": ap["id"], "pic_id": scope["anggota_id"],
+                                         "$or": [{"last_checkin_at": None}, {"last_checkin_at": {"$lt": batas}}]},
+                                        {"_id": 0, "id": 1, "nama": 1, "last_checkin_at": 1}).to_list(50)
+            checkin_perlu = rows
+    count = len(delegated) + urgent + approvals + len(aktivitas) + len(checkin_perlu)
     role = "spv" if scope["is_spv"] else ("head" if scope["head_divisi_id"] else "anggota")
     return {"count": count, "delegated": delegated, "reminders": reminders, "approvals": approvals, "role": role,
-            "aktivitas": aktivitas, "perlu_review": perlu_review}
+            "aktivitas": aktivitas, "perlu_review": perlu_review, "checkin_perlu": checkin_perlu}
 
 
 # ============ TASK ACTIVITY & COMMENTS ============
@@ -2114,6 +2130,10 @@ api_router.include_router(build_auth_router(db))
 api_router.include_router(build_monitoring_router(db, get_current_user, user_scope))
 api_router.include_router(build_strategy_router(db, get_current_user, require_spv, user_scope))
 
+from sasaran import build_sasaran_router
+sasaran_router = build_sasaran_router(db, get_current_user, user_scope)
+api_router.include_router(sasaran_router)
+
 import sys as _sys
 from agent_mcp import build_mcp_router
 api_router.include_router(build_mcp_router(_sys.modules[__name__]))
@@ -2151,6 +2171,10 @@ async def on_startup():
         await db.agent_link_codes.create_index("expires_at", expireAfterSeconds=0)
         await db.agent_chat_links.create_index([("chat_id", 1), ("gateway_key_id", 1)], unique=True)
         await db.agent_audit.create_index("at", expireAfterSeconds=60 * 60 * 24 * 180)  # simpan 180 hari
+        await db.sasaran.create_index([("period_id", 1), ("urutan", 1)])
+        await db.ukuran.create_index([("period_id", 1), ("pic_id", 1)])
+        await db.ukuran_checkins.create_index([("ukuran_id", 1), ("at", 1)])
+        await db.tasks.create_index("sasaran_id")
     except Exception:
         pass
     # Migrate existing amaliyah_entries without user_id → assign to first SPV

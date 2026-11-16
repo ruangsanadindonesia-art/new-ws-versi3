@@ -199,3 +199,26 @@ export const importExcel = (file) => {
     withCredentials: true,
   }).then((r) => r.data);
 };
+
+// ============ SASARAN (Sasaran → Ukuran → Tugas) ============
+export const sasaranOverview = (period_id) => api.get("/sasaran/overview", { params: period_id ? { period_id } : {} }).then((r) => r.data);
+export const sasaranPeriods = () => api.get("/sasaran/periods").then((r) => r.data);
+export const sasaranCreatePeriod = (p) => api.post("/sasaran/periods", p).then((r) => r.data);
+export const sasaranUpdatePeriod = (id, p) => api.put(`/sasaran/periods/${id}`, p).then((r) => r.data);
+export const sasaranActivatePeriod = (id) => api.post(`/sasaran/periods/${id}/activate`).then((r) => r.data);
+export const sasaranArchivePeriod = (id) => api.post(`/sasaran/periods/${id}/archive`).then((r) => r.data);
+export const sasaranCopyFrom = (id, src) => api.post(`/sasaran/periods/${id}/copy-from/${src}`).then((r) => r.data);
+export const sasaranCreate = (p) => api.post("/sasaran", p).then((r) => r.data);
+export const sasaranUpdate = (id, p) => api.put(`/sasaran/s/${id}`, p).then((r) => r.data);
+export const sasaranDelete = (id) => api.delete(`/sasaran/s/${id}`).then((r) => r.data);
+export const ukuranCreate = (sid, p) => api.post(`/sasaran/s/${sid}/ukuran`, p).then((r) => r.data);
+export const ukuranUpdate = (id, p) => api.put(`/sasaran/ukuran/${id}`, p).then((r) => r.data);
+export const ukuranDelete = (id) => api.delete(`/sasaran/ukuran/${id}`).then((r) => r.data);
+export const ukuranCheckin = (id, p) => api.post(`/sasaran/ukuran/${id}/checkin`, p).then((r) => r.data);
+export const ukuranCheckins = (id) => api.get(`/sasaran/ukuran/${id}/checkins`).then((r) => r.data);
+export const sasaranEvaluasi = (period_id) => api.get("/sasaran/evaluasi", { params: { period_id } }).then((r) => r.data);
+export const sasaranSaveEvaluasi = (period_id, p) => api.put("/sasaran/evaluasi", p, { params: { period_id } }).then((r) => r.data);
+export const sasaranVisi = () => api.get("/sasaran/visi").then((r) => r.data);
+export const sasaranSaveVisi = (p) => api.put("/sasaran/visi", p).then((r) => r.data);
+export const sasaranPdf = (jenis, period_id, divisi_id) =>
+  api.get(`/sasaran/pdf/${jenis}`, { params: { period_id, ...(divisi_id ? { divisi_id } : {}) }, responseType: "blob" }).then((r) => r.data);

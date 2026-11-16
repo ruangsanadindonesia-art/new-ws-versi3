@@ -214,6 +214,16 @@ def build_mcp_router(srv) -> APIRouter:
         done = {(e if isinstance(e, dict) else e.model_dump())["item_id"] for e in ent if (e if isinstance(e, dict) else e.model_dump()).get("checked")}
         return {"tanggal": tgl, "amaliyah": [{"id": i["id"], "nama": i["nama"], "target": i.get("target_metrik"), "sudah": i["id"] in done} for i in items if i.get("aktif", True)]}
 
+    @tool("sasaran_saya", "Sasaran periode aktif: status tiap sasaran, ukuran yang saya pegang (PIC), dan mana yang perlu check-in.", {})
+    async def t_sasaran(user, ctx, a):
+        ov = await srv.sasaran_router.overview_fn(
+            (await db.strategy_periods.find_one({"active": True}, {"_id": 0, "id": 1}) or {}).get("id") or "-", user)
+        ring = lambda u: {"id": u["id"], "nama": u["nama"], "arah": u.get("arah"), "satuan": u.get("satuan"), "awal": u.get("awal"),
+                          "target": u.get("target"), "capaian": u.get("capaian"), "status": u["status"], "perlu_update": u["perlu_update"]}
+        return {"periode": ov["period"]["nama"], "waktu_berjalan_pct": ov["expected_pct"], "ringkasan": ov["stats"],
+                "sasaran": [{"judul": s["judul"], "status": s["status"], "pct": s["pct"], "pj": (s.get("pj") or {}).get("nama")} for s in ov["sasaran"]],
+                "ukuran_saya": [ring(u) for u in ov["ukuran_saya"]]}
+
     # --------------------------- write tools (hanya kunci personal ber-scope write)
     @tool("buat_tugas", "Buat tugas baru. R default = saya; isi R untuk menugaskan orang lain. A default = saya. Tanggal YYYY-MM-DD.",
           {"nama": {"type": "string", "minLength": 2}, "R": {"type": "string", "description": "nama/id yang mengerjakan"},
@@ -260,6 +270,19 @@ def build_mcp_router(srv) -> APIRouter:
     async def t_komentar(user, ctx, a):
         await srv.add_comment(a["task_id"], srv.CommentPayload(text=a["teks"]), ctx["actor"])
         return {"ok": True}
+
+    @tool("check_in_ukuran", "Check-in capaian terbaru sebuah ukuran sasaran (saya PIC). keyakinan: YAKIN, RAGU, atau BERISIKO. Ambil id dari sasaran_saya.",
+          {"ukuran_id": {"type": "string"}, "nilai": {"type": "number"}, "keyakinan": {"type": "string", "enum": ["YAKIN", "RAGU", "BERISIKO"]},
+           "catatan": {"type": "string", "maxLength": 500}}, ["ukuran_id", "nilai"], write=True)
+    async def t_checkin(user, ctx, a):
+        from sasaran import build_sasaran_router  # noqa: F401  (model CheckinIn ada di router)
+        from pydantic import BaseModel
+        class _C(BaseModel):
+            nilai: float
+            confidence: str = "YAKIN"
+            catatan: str = ""
+        u = await srv.sasaran_router.do_checkin(a["ukuran_id"], _C(nilai=a["nilai"], confidence=a.get("keyakinan", "YAKIN"), catatan=a.get("catatan", "")), ctx["actor"])
+        return {"ok": True, "ukuran": u["nama"], "capaian": u.get("capaian"), "status": u["status"], "pct": u.get("pct")}
 
     @tool("centang_amaliyah", "Centang (atau batalkan) amaliyah saya untuk tanggal tertentu (default hari ini).",
           {"item_id": {"type": "string"}, "tanggal": {"type": "string"}, "selesai": {"type": "boolean", "description": "default true"}},

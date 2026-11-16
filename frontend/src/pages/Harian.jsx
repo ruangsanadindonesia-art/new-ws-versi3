@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Check, HeartHandshake, Repeat } from "lucide-react";
+import { Check, HeartHandshake, Repeat, Target } from "lucide-react";
 import { toast } from "sonner";
-import { listAmaliyahItems, listEntries, upsertEntry, listTasks, listTodoEntries, upsertTodoEntry, listAnggota } from "@/lib/api";
+import { listAmaliyahItems, listEntries, upsertEntry, listTasks, listTodoEntries, upsertTodoEntry, listAnggota, sasaranOverview } from "@/lib/api";
+import { Link } from "react-router-dom";
+import { CheckinDialog, fmtAngka, StatusPill } from "@/pages/sasaran/parts";
 import { useAuth } from "@/lib/AuthContext";
 import Spiritual from "@/pages/Spiritual";
 import TugasRutin from "@/pages/TugasRutin";
@@ -52,6 +54,10 @@ function HariIni({ onOpen }) {
   const [rutin, setRutin] = useState([]);
   const [todo, setTodo] = useState({});
   const [loading, setLoading] = useState(true);
+  const [ukuran, setUkuran] = useState([]);
+  const [ck, setCk] = useState(null);
+  const loadUkuran = () => sasaranOverview().then((o) => setUkuran(o.ukuran_saya || [])).catch(() => {});
+  useEffect(() => { loadUkuran(); }, []);
 
   useEffect(() => {
     (async () => {
@@ -98,6 +104,30 @@ function HariIni({ onOpen }) {
   return (
     <div className="space-y-4" data-testid="hari-ini">
       <p className="text-sm text-emerald-800/70">{tanggal}. Centang yang sudah dikerjakan; tersimpan otomatis.</p>
+
+      {ukuran.length > 0 && (
+        <section className={`rounded-xl border ${ukuran.some((u) => u.perlu_update) ? "border-amber-200 bg-amber-50/50" : "border-emerald-100 bg-white"}`} data-testid="hari-sasaran">
+          <header className="flex items-center justify-between gap-2 border-b border-emerald-50 px-4 py-3">
+            <h3 className="flex items-center gap-2 font-display text-base font-semibold text-emerald-950"><Target size={16} className="text-emerald-700" /> Check-in sasaran</h3>
+            <span className="text-xs text-emerald-800">{ukuran.filter((u) => u.perlu_update).length} perlu di-update</span>
+          </header>
+          <ul>
+            {ukuran.map((u) => (
+              <li key={u.id} className="flex items-center gap-3 border-b border-emerald-50 px-4 py-3 last:border-b-0">
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm text-emerald-950">{u.nama}</span>
+                  <span className="block text-[11px] tabular-nums text-emerald-800/60">{fmtAngka(u.capaian, u.satuan)} / {fmtAngka(u.target, u.satuan)}</span>
+                </span>
+                <StatusPill status={u.status} small />
+                <button onClick={() => setCk(u)} data-testid={`hari-checkin-${u.id}`}
+                  className={`rounded-md px-3 py-1.5 text-xs font-semibold ${u.perlu_update ? "bg-emerald-800 text-white" : "border border-emerald-200 text-emerald-900"}`}>Check-in</button>
+              </li>
+            ))}
+          </ul>
+          <Link to="/sasaran" className="block w-full border-t border-emerald-50 px-4 py-2 text-left text-xs font-medium text-emerald-700 hover:bg-emerald-50">Lihat semua sasaran →</Link>
+        </section>
+      )}
+      <CheckinDialog ukuran={ck} open={!!ck} onOpenChange={(v) => !v && setCk(null)} onSaved={loadUkuran} />
 
       <section className="rounded-xl border border-emerald-100 bg-white">
         <header className="flex items-center justify-between gap-2 border-b border-emerald-50 px-4 py-3">

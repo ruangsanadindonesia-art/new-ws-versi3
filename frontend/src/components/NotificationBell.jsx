@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bell, CheckCheck, Inbox, CalendarClock, AlertTriangle, UserCheck, Send, Activity } from "lucide-react";
+import { Bell, CheckCheck, Inbox, CalendarClock, AlertTriangle, UserCheck, Send, Activity, Target } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { notificationsFeed, markNotificationsSeen } from "@/lib/api";
 import { useAuth } from "@/lib/AuthContext";
@@ -15,6 +15,7 @@ export default function NotificationBell() {
   const { user } = useAuth();
   const [data, setData] = useState({ count: 0, delegated: [], reminders: [], approvals: 0, role: "anggota", aktivitas: [] });
   const aktivitas = data.aktivitas || [];
+  const checkin = data.checkin_perlu || [];
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
 
@@ -34,7 +35,7 @@ export default function NotificationBell() {
   const goTasks = async () => { await markAll(); setOpen(false); navigate("/tasks"); };
   const goUsers = () => { setOpen(false); navigate("/users"); };
 
-  const empty = data.delegated.length === 0 && data.reminders.length === 0 && !data.approvals && aktivitas.length === 0;
+  const empty = data.delegated.length === 0 && data.reminders.length === 0 && !data.approvals && aktivitas.length === 0 && checkin.length === 0;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -100,6 +101,14 @@ export default function NotificationBell() {
                     );
                   })}
                 </div>
+              )}
+
+              {checkin.length > 0 && (
+                <button onClick={() => { setOpen(false); navigate("/sasaran"); }} data-testid="notif-checkin"
+                  className="flex w-full items-center gap-2 border-b border-emerald-50 bg-amber-50/50 px-3 py-2.5 text-left hover:bg-amber-50">
+                  <Target size={15} className="text-amber-700" />
+                  <span className="text-xs font-medium text-amber-900">{checkin.length} ukuran sasaran menunggu check-in pekan ini</span>
+                </button>
               )}
 
               {/* Aktivitas pada tugas di mana saya A / C / I */}

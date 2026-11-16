@@ -22,7 +22,7 @@ import { RACI, RoleTag, raciRoles, PersonSelect, PeopleSelect, RaciLegend } from
 const STATUS_LABELS = { BELUM_MULAI: "Belum Mulai", DALAM_PROSES: "Dalam Proses", MENUNGGU_REVIEW: "Menunggu review", REVISI: "Revisi", TERKENDALA: "Terkendala", SELESAI: "Selesai" };
 
 // ============ TASK DIALOG ============
-export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editing, lists, labels, anggotaAll, divisiList, isSpv = true, myAnggotaId = null, editingTask = null, onRevisi = null, onKirimReview = null, onSetujui = null }) {
+export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editing, lists, labels, anggotaAll, divisiList, isSpv = true, myAnggotaId = null, editingTask = null, onRevisi = null, onKirimReview = null, onSetujui = null, sasaranList = [] }) {
   const set = (k) => (e) => setForm({ ...form, [k]: e?.target ? e.target.value : e });
   const [revisiNote, setRevisiNote] = useState("");
   const [showDetail, setShowDetail] = useState(false);
@@ -49,7 +49,7 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
   // R pada tugas yang wajib review tidak memilih "Selesai" sendiri — pakai tombol Kirim untuk review.
   const statusOptions = Object.entries(STATUS_LABELS).filter(([v]) =>
     v === form.status || isSpv || (v !== "MENUNGGU_REVIEW" && !(v === "SELESAI" && needsReview && !isA)));
-  const detailCount = [form.tanggal_mulai, (form.label_ids || []).length, form.catatan_spv, isRutin].filter(Boolean).length;
+  const detailCount = [form.tanggal_mulai, (form.label_ids || []).length, form.catatan_spv, isRutin, form.sasaran_id].filter(Boolean).length;
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) setShowDetail(false); onOpenChange(v); }}>
@@ -167,11 +167,19 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
 
           <button type="button" onClick={() => setShowDetail((v) => !v)} data-testid="toggle-detail"
             className="flex w-full items-center justify-between rounded-md border border-dashed border-emerald-200 px-3 py-2 text-xs font-medium text-emerald-800 hover:bg-emerald-50">
-            <span>Detail lainnya{detailCount ? ` (${detailCount} terisi)` : ""} — tipe, kolom, tanggal mulai, label{isSpv && editing ? ", catatan SPV" : ""}</span>
+            <span>Detail lainnya{detailCount ? ` (${detailCount} terisi)` : ""} — sasaran, tipe, kolom, tanggal mulai, label{isSpv && editing ? ", catatan SPV" : ""}</span>
             <span>{showDetail ? "Tutup" : "Buka"}</span>
           </button>
           {showDetail && (
             <div className="space-y-3 rounded-lg bg-emerald-50/40 p-3" data-testid="detail-section">
+              <div>
+                <label className="text-xs font-medium text-emerald-900" htmlFor="tk-sasaran">Mendukung sasaran <span className="text-emerald-700/50">(opsional)</span></label>
+                <select id="tk-sasaran" value={form.sasaran_id || ""} onChange={(e) => setForm({ ...form, sasaran_id: e.target.value })} disabled={!canDef}
+                  data-testid="select-sasaran" className="h-9 w-full rounded-md border border-input bg-white px-2 text-sm disabled:opacity-60">
+                  <option value="">— Tidak terkait sasaran —</option>
+                  {sasaranList.map((s) => <option key={s.id} value={s.id}>{s.tim} · {s.judul}</option>)}
+                </select>
+              </div>
               <div>
                 <label className="text-xs font-medium text-emerald-900">Tipe Tugas</label>
                 <Select value={form.kategori} onValueChange={set("kategori")} disabled={!canDef}>

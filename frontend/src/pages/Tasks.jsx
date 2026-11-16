@@ -11,7 +11,7 @@ import {
   listTasks, createTask, updateTask, deleteTask, archiveTask, unarchiveTask, bulkDeleteTasks,
   bulkArchiveTasks, bulkUnarchiveTasks,
   listTaskLists, listTaskLabels, listDivisi, listAnggota, markSeenTasks, moveTask,
-  importExcel, anggotaAnalytics, revisiTask, submitReview, approveTask,
+  importExcel, anggotaAnalytics, revisiTask, submitReview, approveTask, sasaranOverview,
 } from "@/lib/api";
 import KanbanBoard from "./tasks/KanbanBoard";
 import TableView from "./tasks/TableView";
@@ -47,6 +47,7 @@ export default function Tasks() {
   // Mode tampilan: saya (R) | review (A, menunggu review) | berikan (A, dikerjakan orang lain) | diikuti (C/I) | tim
   const [mode, setMode] = useState(user?.anggota_id ? "saya" : "tim");
   const [reviewCount, setReviewCount] = useState(0);
+  const [sasaranList, setSasaranList] = useState([]);
   const [filter, setFilter] = useState({ search: "", list_id: "ALL", label_id: "ALL", penerima_id: "ALL" });
   const [selectedIds, setSelectedIds] = useState([]);
   const [presets, setPresets] = useState(() => {
@@ -72,6 +73,7 @@ export default function Tasks() {
     (async () => {
       const [d, lb, ag] = await Promise.all([listDivisi(), listTaskLabels(), listAnggota()]);
       setDivisiList(d); setLabels(lb); setAnggotaAll(ag);
+      sasaranOverview().then((o) => setSasaranList((o.sasaran || []).map((s) => ({ id: s.id, judul: s.judul, tim: s.level === "TIM" ? s.divisi?.nama : "Lembaga" })))).catch(() => {});
       const myAng = user?.anggota_id ? ag.find((a) => a.id === user.anggota_id) : null;
       const firstDiv = user?.role === "spv" ? "ALL" : (myAng?.divisi_id || d[0]?.id);
       if (!divisiId && firstDiv) setDivisiId(firstDiv);
@@ -148,6 +150,7 @@ export default function Tasks() {
       if (!payload.tanggal_mulai) payload.tanggal_mulai = null;
       if (!payload.deadline) payload.deadline = null;
       delete payload.link_output; delete payload.pemberi_tugas;
+      if (!editing && !payload.sasaran_id) delete payload.sasaran_id;
       if (editing) { await updateTask(editing.id, payload); if (!keepOpen) toast.success("Tugas disimpan"); }
       else {
         delete payload.catatan_spv;
@@ -392,7 +395,7 @@ export default function Tasks() {
 
       <TaskDialog open={taskDialogOpen} onOpenChange={setTaskDialogOpen} form={form} setForm={setForm} onSubmit={submit} editing={!!editing}
         lists={lists} labels={labels} anggotaAll={anggotaAll} divisiList={divisiList} currentDivisiId={divisiId}
-        isSpv={isSpv} myAnggotaId={myAnggotaId} editingTask={editing} onRevisi={submitRevisi} onKirimReview={kirimReview} onSetujui={setujui}
+        isSpv={isSpv} myAnggotaId={myAnggotaId} editingTask={editing} onRevisi={submitRevisi} onKirimReview={kirimReview} onSetujui={setujui} sasaranList={sasaranList}
         onNeedMoveConfirm={(targetDivisiId, anggotaNama) => {
           if (!editing) return;
           const nama = divisiList.find((d) => d.id === targetDivisiId)?.nama;
