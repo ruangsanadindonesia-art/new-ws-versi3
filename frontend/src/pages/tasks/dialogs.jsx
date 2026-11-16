@@ -17,6 +17,7 @@ import {
   moveTask, bulkMoveTasks, taskActivity, taskAddComment,
 } from "@/lib/api";
 import { ColorPicker, KATEGORI_LABEL, TIPES } from "./shared";
+import { RACI, RoleTag, raciRoles, PersonSelect, PeopleSelect, RaciLegend } from "./raci";
 
 const STATUS_LABELS = { BELUM_MULAI: "Belum Mulai", DALAM_PROSES: "Dalam Proses", SELESAI: "Selesai", TERKENDALA: "Terkendala", REVISI: "Revisi" };
 
@@ -30,32 +31,15 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
   };
   const isRutin = form.kategori !== "PROJECT";
 
-  // Delegation view: I'm pemberi (yg ngasih), tapi bukan penerima → read-only monitoring mode
-  const isMonitorOnly = !isSpv && editingTask &&
-    editingTask.pemberi_id === myAnggotaId &&
-    editingTask.penerima_tugas_id !== myAnggotaId;
-  // Only penerima (or SPV) may fill hasil_*; pemberi tidak boleh.
-  const canFillHasil = isSpv || (editingTask && editingTask.penerima_tugas_id === myAnggotaId);
+  // Hak per peran RACI. A (atau SPV) mengatur definisi tugas & RACI; R mengerjakan (status, kolom, hasil).
+  const myRoles = editing ? raciRoles(editingTask, myAnggotaId) : ["R", "A"];
+  const canDef = !editing || isSpv || myRoles.includes("A");
+  const canWork = !editing || isSpv || myRoles.includes("R");
+  const isMonitorOnly = editing && !canDef && !canWork; // Consulted / Informed
+  const canFillHasil = editing && canWork;
   const pemberiAnggota = editingTask?.pemberi_id ? anggotaAll.find((a) => a.id === editingTask.pemberi_id) : null;
-  const canRevisi = editing && onRevisi && (isMonitorOnly || isSpv);
-
-  const anggotaByDivisi = {};
-  anggotaAll.forEach((a) => {
-    const key = a.divisi_id || "none";
-    if (!anggotaByDivisi[key]) anggotaByDivisi[key] = [];
-    anggotaByDivisi[key].push(a);
-  });
-
-  const onPickPenerima = (val) => {
-    if (val === "none") { setForm({ ...form, penerima_tugas_id: null }); return; }
-    const a = anggotaAll.find((x) => x.id === val);
-    if (!a) return;
-    setForm({ ...form, penerima_tugas_id: a.id });
-    const targetDivisi = form.divisi_id || currentDivisiId;
-    if (a.divisi_id && a.divisi_id !== targetDivisi && editing && onNeedMoveConfirm) {
-      onNeedMoveConfirm(a.divisi_id, a.nama);
-    }
-  };
+  const canRevisi = editing && onRevisi && (isSpv || (myRoles.includes("A") && !myRoles.includes("R")));
+  const raciExclude = [form.penerima_tugas_id, form.pemberi_id].filter(Boolean);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -63,13 +47,17 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
         <DialogHeader>
           <DialogTitle className="font-display text-xl">
             {editing ? "Ubah Tugas" : "Tugas Baru"}
-            {isMonitorOnly && <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">Monitor (read-only)</span>}
+            {editing && myRoles.length > 0 && (
+              <span className="ml-2 inline-flex items-center gap-1 align-middle text-xs font-normal text-emerald-800/70">
+                Peran Anda: {myRoles.map((r) => <RoleTag key={r} role={r} />)}
+              </span>
+            )}
           </DialogTitle>
           <DialogDescription className="sr-only">Formulir membuat atau mengubah tugas, termasuk penerima, brief, dan hasil.</DialogDescription>
         </DialogHeader>
         {isMonitorOnly && (
           <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
-            Anda adalah <b>pemberi tugas</b>, bukan penerima. Anda hanya dapat memantau progress & melihat hasil. Hanya penerima (atau SPV) yang bisa mengubah tugas ini.
+            Anda <b>{myRoles.includes("C") ? "Consulted (C)" : "Informed (I)"}</b> di tugas ini: bisa melihat perkembangan{myRoles.includes("C") ? " dan memberi masukan lewat komentar" : ""}. Perubahan dilakukan oleh R (mengerjakan) atau A (penanggung jawab).
           </div>
         )}
         <fieldset disabled={isMonitorOnly} className={isMonitorOnly ? "opacity-90" : ""}>
@@ -83,11 +71,11 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
           )}
           <div>
             <label className="text-xs font-medium text-emerald-900">Nama Tugas *</label>
-            <Input data-testid="input-nama" value={form.nama} onChange={set("nama")} placeholder="contoh: Rekap konten pekan ini" />
+            <Input data-testid="input-nama" value={form.nama} onChange={set("nama")} placeholder="contoh: Rekap konten pekan ini" disabled={!canDef} />
           </div>
           <div>
             <label className="text-xs font-medium text-emerald-900">Tipe Tugas</label>
-            <Select value={form.kategori} onValueChange={set("kategori")}>
+            <Select value={form.kategori} onValueChange={set("kategori")} disabled={!canDef}>
               <SelectTrigger data-testid="select-tipe"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {TIPES.map((k) => <SelectItem key={k} value={k}>{KATEGORI_LABEL[k]}</SelectItem>)}
@@ -102,7 +90,7 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
           {editing && (
             <div>
               <label className="text-xs font-medium text-emerald-900">Status Tugas</label>
-              <Select value={form.status} onValueChange={set("status")}>
+              <Select value={form.status} onValueChange={set("status")} disabled={!canWork}>
                 <SelectTrigger data-testid="select-status"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {Object.entries(STATUS_LABELS).map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}
@@ -113,7 +101,7 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
           {!isRutin && (
             <div>
               <label className="text-xs font-medium text-emerald-900">List</label>
-              <Select value={form.list_id || "none"} onValueChange={(v) => setForm({ ...form, list_id: v === "none" ? null : v })}>
+              <Select value={form.list_id || "none"} onValueChange={(v) => setForm({ ...form, list_id: v === "none" ? null : v })} disabled={!canWork}>
                 <SelectTrigger data-testid="select-list"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">Tanpa List</SelectItem>
@@ -130,7 +118,7 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
               </div>
               <div>
                 <label className="text-xs font-medium text-emerald-900">Deadline</label>
-                <Input type="date" value={form.deadline || ""} onChange={set("deadline")} data-testid="input-deadline" />
+                <Input type="date" value={form.deadline || ""} onChange={set("deadline")} data-testid="input-deadline" disabled={!canDef} />
               </div>
             </div>
           )}
@@ -155,46 +143,34 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
               })}
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-medium text-emerald-900">Pemberi Tugas</label>
-              <Input value={form.pemberi_tugas || ""} onChange={set("pemberi_tugas")} placeholder="opsional" />
+          <div className="rounded-lg border border-emerald-200 p-3" data-testid="raci-section">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold uppercase tracking-wider text-emerald-800">Peran (RACI)</p>
+              <RaciLegend />
             </div>
-            <div>
-              <label className="text-xs font-medium text-emerald-900">Penerima Tugas (Anggota)</label>
-              {!editing ? (
-                <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-2.5 text-[11px] text-emerald-800" data-testid="create-self-note">
-                  Tugas baru otomatis masuk ke <b>workspace Anda sendiri</b>. Untuk memberi/menugaskan ke anggota lain, buka tugasnya lalu gunakan tombol <b>Pindahkan</b>.
-                </div>
-              ) : (
-                <>
-                  <Select value={form.penerima_tugas_id || "none"} onValueChange={onPickPenerima}>
-                    <SelectTrigger data-testid="select-penerima"><SelectValue placeholder="Pilih anggota..." /></SelectTrigger>
-                    <SelectContent className="max-h-72">
-                      <SelectItem value="none">Tanpa penerima</SelectItem>
-                      {divisiList.map((d) => {
-                        const anggota = anggotaByDivisi[d.id] || [];
-                        if (anggota.length === 0) return null;
-                        return (
-                          <SelectGroup key={d.id}>
-                            <SelectLabel className="text-[10px] uppercase text-emerald-800/60">{d.nama}</SelectLabel>
-                            {anggota.map((a) => (
-                              <SelectItem key={a.id} value={a.id}>
-                                <span className="mr-2 inline-block h-2 w-2 rounded-full" style={{ background: a.warna }} />
-                                {a.nama}
-                              </SelectItem>
-                            ))}
-                          </SelectGroup>
-                        );
-                      })}
-                    </SelectContent>
-                  </Select>
-                  <p className="mt-1 text-[10px] text-emerald-700/70">
-                    Mengubah penerima ke divisi lain akan <b>memindahkan</b> tugas. Tugas tetap tampil di workspace Anda sebagai <b>monitor</b> (read-only).
-                  </p>
-                </>
-              )}
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-emerald-900"><RoleTag role="R" /> {RACI.R.nama} <span className="font-normal text-emerald-800/50">· mengerjakan</span></label>
+                <PersonSelect value={form.penerima_tugas_id} onChange={(v) => setForm({ ...form, penerima_tugas_id: v, consulted_ids: (form.consulted_ids || []).filter((x) => x !== v), informed_ids: (form.informed_ids || []).filter((x) => x !== v) })}
+                  anggotaAll={anggotaAll} divisiList={divisiList} disabled={!canDef} placeholder="Pilih yang mengerjakan" testId="select-raci-r" />
+              </div>
+              <div>
+                <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-emerald-900"><RoleTag role="A" /> {RACI.A.nama} <span className="font-normal text-emerald-800/50">· menyetujui</span></label>
+                <PersonSelect value={form.pemberi_id} onChange={(v) => setForm({ ...form, pemberi_id: v, consulted_ids: (form.consulted_ids || []).filter((x) => x !== v), informed_ids: (form.informed_ids || []).filter((x) => x !== v) })}
+                  anggotaAll={anggotaAll} divisiList={divisiList} disabled={!canDef} placeholder="Pilih penanggung jawab" testId="select-raci-a" />
+              </div>
+              <div>
+                <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-emerald-900"><RoleTag role="C" /> {RACI.C.nama} <span className="font-normal text-emerald-800/50">· opsional</span></label>
+                <PeopleSelect value={form.consulted_ids || []} onChange={(v) => setForm({ ...form, consulted_ids: v, informed_ids: (form.informed_ids || []).filter((x) => !v.includes(x)) })}
+                  anggotaAll={anggotaAll} divisiList={divisiList} exclude={raciExclude} disabled={!canDef} testId="select-raci-c" />
+              </div>
+              <div>
+                <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-emerald-900"><RoleTag role="I" /> {RACI.I.nama} <span className="font-normal text-emerald-800/50">· opsional</span></label>
+                <PeopleSelect value={form.informed_ids || []} onChange={(v) => setForm({ ...form, informed_ids: v, consulted_ids: (form.consulted_ids || []).filter((x) => !v.includes(x)) })}
+                  anggotaAll={anggotaAll} divisiList={divisiList} exclude={[...raciExclude, ...(form.consulted_ids || [])]} disabled={!canDef} testId="select-raci-i" />
+              </div>
             </div>
+            {!editing && <p className="mt-2 text-[10px] text-emerald-700/70">R dan A otomatis Anda sendiri. Ganti R untuk langsung menugaskan orang lain; tugas tetap tercatat di tim Anda.</p>}
           </div>
           <div>
             <label className="text-xs font-medium text-emerald-900">Catatan Tim</label>
@@ -202,12 +178,12 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
           </div>
           <div>
             <label className="text-xs font-medium text-emerald-900">Brief / Link Referensi <span className="text-emerald-700/50">(opsional)</span></label>
-            <Input value={form.brief_link || ""} onChange={set("brief_link")} placeholder="https://docs.google.com/... (link brief eksternal)" data-testid="input-brief-link" />
+            <Input value={form.brief_link || ""} onChange={set("brief_link")} placeholder="https://docs.google.com/... (link brief eksternal)" data-testid="input-brief-link" disabled={!canDef} />
           </div>
           {editing && (
             <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-3">
               <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-emerald-800">
-                Hasil Tugas {canFillHasil ? <span className="text-[10px] font-normal normal-case text-emerald-700/70">(diisi oleh penerima)</span> : <span className="text-[10px] font-normal normal-case text-amber-700">(read-only — hanya penerima yang bisa isi)</span>}
+                Hasil Tugas {canFillHasil ? <span className="text-[10px] font-normal normal-case text-emerald-700/70">(diisi oleh R)</span> : <span className="text-[10px] font-normal normal-case text-amber-700">(hanya R yang bisa mengisi)</span>}
               </p>
               <div className="space-y-2">
                 <div>
@@ -233,9 +209,10 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
               </div>
             </>
           )}
-          {editing && editingTask?.id && <ActivityPanel taskId={editingTask.id} />}
         </div>
         </fieldset>
+        {editing && editingTask?.id && <ActivityPanel taskId={editingTask.id} canComment={isSpv || myRoles.some((r) => r !== "I") || myRoles.length === 0} />}
+
         {canRevisi && (
           <div className="mt-3 rounded-lg border border-red-200 bg-red-50/60 p-3" data-testid="revisi-box">
             <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-red-800">Review Hasil &amp; Minta Revisi</p>
@@ -271,9 +248,11 @@ const KIND_META = {
   revisi: { label: "meminta revisi", cls: "text-red-700" },
   move: { label: "memindahkan tugas", cls: "text-amber-700" },
   comment: { label: "berkomentar", cls: "text-emerald-900" },
+  raci: { label: "mengatur peran RACI", cls: "text-sky-700" },
+  hasil: { label: "memperbarui hasil", cls: "text-emerald-700" },
 };
 
-function ActivityPanel({ taskId }) {
+function ActivityPanel({ taskId, canComment = true }) {
   const [items, setItems] = useState([]);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(true);
@@ -307,10 +286,10 @@ function ActivityPanel({ taskId }) {
             );
           })}
       </div>
-      <div className="mt-2 flex items-center gap-1">
+      {canComment ? <div className="mt-2 flex items-center gap-1">
         <Input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") send(); }} placeholder="Tulis komentar…" className="h-8 text-xs" data-testid="comment-input" />
         <Button size="sm" onClick={send} className="h-8 shrink-0 bg-emerald-900 px-2.5 text-white hover:bg-emerald-800" data-testid="comment-send"><Send size={13} /></Button>
-      </div>
+      </div> : <p className="mt-2 text-[10px] italic text-emerald-800/50">Peran Informed hanya bisa melihat.</p>}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bell, CheckCheck, Inbox, CalendarClock, AlertTriangle, UserCheck, Send } from "lucide-react";
+import { Bell, CheckCheck, Inbox, CalendarClock, AlertTriangle, UserCheck, Send, Activity } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { notificationsFeed, markNotificationsSeen } from "@/lib/api";
 import { useAuth } from "@/lib/AuthContext";
@@ -13,7 +13,8 @@ const URG = {
 
 export default function NotificationBell() {
   const { user } = useAuth();
-  const [data, setData] = useState({ count: 0, delegated: [], reminders: [], approvals: 0, role: "anggota" });
+  const [data, setData] = useState({ count: 0, delegated: [], reminders: [], approvals: 0, role: "anggota", aktivitas: [] });
+  const aktivitas = data.aktivitas || [];
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
 
@@ -33,7 +34,7 @@ export default function NotificationBell() {
   const goTasks = async () => { await markAll(); setOpen(false); navigate("/tasks"); };
   const goUsers = () => { setOpen(false); navigate("/users"); };
 
-  const empty = data.delegated.length === 0 && data.reminders.length === 0 && !data.approvals;
+  const empty = data.delegated.length === 0 && data.reminders.length === 0 && !data.approvals && aktivitas.length === 0;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -50,9 +51,9 @@ export default function NotificationBell() {
       <PopoverContent align="end" className="w-96 p-0" data-testid="notif-panel">
         <div className="flex items-center justify-between border-b border-emerald-100 px-3 py-2">
           <p className="text-xs font-semibold text-emerald-950">Notifikasi</p>
-          {data.delegated.length > 0 && (
+          {(data.delegated.length > 0 || aktivitas.length > 0) && (
             <button onClick={markAll} data-testid="notif-mark-all" className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-700 hover:underline">
-              <CheckCheck size={11} /> Tandai delegasi dibaca
+              <CheckCheck size={11} /> Tandai sudah dibaca
             </button>
           )}
         </div>
@@ -98,6 +99,26 @@ export default function NotificationBell() {
                       </button>
                     );
                   })}
+                </div>
+              )}
+
+              {/* Aktivitas pada tugas di mana saya A / C / I */}
+              {aktivitas.length > 0 && (
+                <div>
+                  <p className="bg-emerald-50/60 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-800/70">
+                    Perkembangan Tugas ({aktivitas.length})
+                  </p>
+                  {aktivitas.map((n) => (
+                    <button key={n.id} onClick={goTasks} data-testid={`notif-akt-${n.id}`}
+                      className="flex w-full items-start gap-2 border-b border-emerald-50 px-3 py-2 text-left transition hover:bg-emerald-50">
+                      <Activity size={13} className="mt-0.5 shrink-0 text-sky-600" />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs font-medium text-emerald-950">{n.nama}</p>
+                        <p className="mt-0.5 line-clamp-2 text-[10px] text-emerald-800/70"><b>{n.actor_name}</b>: {n.text}</p>
+                      </div>
+                      {n.peran && <span className="shrink-0 rounded bg-slate-100 px-1 text-[9px] font-bold text-slate-600" title="Peran Anda">{n.peran}</span>}
+                    </button>
+                  ))}
                 </div>
               )}
 

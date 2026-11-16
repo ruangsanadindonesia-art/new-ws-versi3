@@ -6,6 +6,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 import os
 import io
+import re
 import logging
 import uuid
 from pathlib import Path
@@ -60,11 +61,39 @@ async def _assert_task_access(task_id: str, user: dict) -> dict:
         return task
     my_ang = scope["anggota_id"]
     is_rutin = task.get("kategori") in ("HARIAN", "MINGGUAN", "BULANAN")
-    if my_ang and (task.get("penerima_tugas_id") == my_ang or task.get("pemberi_id") == my_ang):
+    if my_ang and (task.get("penerima_tugas_id") == my_ang or task.get("pemberi_id") == my_ang
+                   or my_ang in (task.get("consulted_ids") or []) or my_ang in (task.get("informed_ids") or [])):
         return task
     if is_rutin and scope["divisi_id"] and task.get("divisi_id") == scope["divisi_id"]:
         return task
     raise HTTPException(403, "Tugas ini bukan bagian dari workspace Anda.")
+
+
+def _can_manage_task(task: dict, scope: dict, action: str) -> bool:
+    """action: 'archive' (setara edit: SPV/penerima) | 'delete' (SPV, atau tugas milik sendiri)."""
+    if scope["is_spv"]:
+        return True
+    me = scope["anggota_id"]
+    if not me:
+        return False
+    is_penerima = task.get("penerima_tugas_id") == me
+    is_pemberi = task.get("pemberi_id") == me
+    if action == "archive":
+        return is_penerima
+    if action == "delete":
+        return is_penerima and is_pemberi
+    return False
+
+
+async def _assert_bulk_manage(ids: List[str], user: dict, action: str) -> None:
+    if not ids:
+        return
+    scope = await user_scope(user)
+    rows = await db.tasks.find({"id": {"$in": ids}}, {"_id": 0, "id": 1, "nama": 1, "pemberi_id": 1, "penerima_tugas_id": 1}).to_list(len(ids))
+    bad = [r.get("nama") or r["id"] for r in rows if not _can_manage_task(r, scope, action)]
+    if bad:
+        verb = "menghapus" if action == "delete" else "mengarsipkan"
+        raise HTTPException(403, f"Anda tidak berhak {verb} {len(bad)} tugas: " + ", ".join(bad[:3]) + ("…" if len(bad) > 3 else ""))
 
 
 async def _assert_bulk_task_access(ids: List[str], user: dict) -> List[dict]:
@@ -148,6 +177,9 @@ class TaskBase(BaseModel):
     revisi_at: Optional[str] = None
     revisi_count: int = 0
     moved_at: Optional[str] = None
+    # RACI: R = penerima_tugas_id, A = pemberi_id, C/I = daftar anggota_id
+    consulted_ids: List[str] = Field(default_factory=list)
+    informed_ids: List[str] = Field(default_factory=list)
 
 
 class Task(TaskBase):
@@ -188,6 +220,8 @@ class TaskUpdate(BaseModel):
     revisi_at: Optional[str] = None
     revisi_count: Optional[int] = None
     moved_at: Optional[str] = None
+    consulted_ids: Optional[List[str]] = None
+    informed_ids: Optional[List[str]] = None
 
 
 class MoveTaskPayload(BaseModel):
@@ -372,6 +406,66 @@ async def root():
     return {"message": "Workspace Ruang Sanad API", "version": "1.2"}
 
 
+# ============ RACI ============
+RACI_FIELD = {"R": "penerima_tugas_id", "A": "pemberi_id", "C": "consulted_ids", "I": "informed_ids"}
+# Field yang boleh diubah tiap peran (SPV boleh semua). Field lain dari form dibuang diam-diam.
+FIELDS_A = {"nama", "kategori", "tanggal_mulai", "deadline", "label_ids", "brief_link", "catatan_tim",
+            "penerima_tugas_id", "pemberi_id", "consulted_ids", "informed_ids", "kategori_id"}
+FIELDS_R = {"status", "list_id", "urutan", "hasil_link", "hasil_catatan", "catatan_tim", "label_ids",
+            "tanggal_mulai"}
+
+
+def _raci_roles(task: dict, my_ang: Optional[str]) -> set:
+    if not my_ang:
+        return set()
+    roles = set()
+    if task.get("penerima_tugas_id") == my_ang:
+        roles.add("R")
+    if task.get("pemberi_id") == my_ang:
+        roles.add("A")
+    if my_ang in (task.get("consulted_ids") or []):
+        roles.add("C")
+    if my_ang in (task.get("informed_ids") or []):
+        roles.add("I")
+    return roles
+
+
+async def _clean_raci(data: dict, r_id: Optional[str], a_id: Optional[str]) -> None:
+    """Validasi C/I: anggota harus ada, unik, dan bukan R/A tugas itu."""
+    for key in ("consulted_ids", "informed_ids"):
+        if key not in data or data[key] is None:
+            continue
+        ids = [i for i in dict.fromkeys(data[key]) if i and i not in (r_id, a_id)]
+        if ids:
+            found = await db.anggota.find({"id": {"$in": ids}}, {"_id": 0, "id": 1}).to_list(len(ids))
+            ok = {f["id"] for f in found}
+            ids = [i for i in ids if i in ok]
+        data[key] = ids
+    if data.get("consulted_ids") and data.get("informed_ids"):
+        data["informed_ids"] = [i for i in data["informed_ids"] if i not in data["consulted_ids"]]
+
+
+async def _anggota_nama(ids) -> str:
+    ids = [i for i in ids if i]
+    if not ids:
+        return "-"
+    rows = await db.anggota.find({"id": {"$in": ids}}, {"_id": 0, "id": 1, "nama": 1}).to_list(len(ids))
+    m = {r["id"]: r["nama"] for r in rows}
+    return ", ".join(m.get(i, "?") for i in ids)
+
+
+async def _log_raci_changes(task_id: str, user: dict, before: dict, after: dict) -> None:
+    if after.get("penerima_tugas_id") != before.get("penerima_tugas_id") and "penerima_tugas_id" in after:
+        await _log_activity(task_id, user, "raci", f"R (penanggung kerja) → {await _anggota_nama([after['penerima_tugas_id']])}")
+    if after.get("pemberi_id") != before.get("pemberi_id") and "pemberi_id" in after:
+        await _log_activity(task_id, user, "raci", f"A (penyetuju) → {await _anggota_nama([after['pemberi_id']])}")
+    for key, label in (("consulted_ids", "C (dimintai masukan)"), ("informed_ids", "I (diberi info)")):
+        if key in after:
+            added = [i for i in after[key] if i not in (before.get(key) or [])]
+            if added:
+                await _log_activity(task_id, user, "raci", f"Ditambahkan sebagai {label}: {await _anggota_nama(added)}")
+
+
 @api_router.get("/tasks", response_model=List[Task])
 async def list_tasks(
     kategori: Optional[str] = None,
@@ -382,6 +476,7 @@ async def list_tasks(
     archived: bool = False,
     search: Optional[str] = None,
     tipe: Optional[str] = None,
+    peran: Optional[str] = None,  # R | A | C | I — tugas di mana saya memegang peran itu (lintas divisi)
     user: dict = Depends(get_current_user),
 ):
     scope = await user_scope(user)
@@ -398,7 +493,7 @@ async def list_tasks(
     if label_id:
         q["label_ids"] = label_id
     if search:
-        q["nama"] = {"$regex": search, "$options": "i"}
+        q["nama"] = {"$regex": re.escape(search), "$options": "i"}
     if tipe == "PROJECT":
         q["kategori"] = "PROJECT"
     elif tipe == "RUTIN":
@@ -413,6 +508,8 @@ async def list_tasks(
         if my_ang:
             or_clauses.append({"penerima_tugas_id": my_ang})
             or_clauses.append({"pemberi_id": my_ang})
+            or_clauses.append({"consulted_ids": my_ang})
+            or_clauses.append({"informed_ids": my_ang})
         if my_div:
             or_clauses.append({
                 "kategori": {"$in": ["HARIAN", "MINGGUAN", "BULANAN"]},
@@ -421,35 +518,61 @@ async def list_tasks(
         if not or_clauses:
             return []
         q["$or"] = or_clauses
-    elif divisi_id:
+    elif divisi_id and not peran:
         q["divisi_id"] = divisi_id
+    if peran:
+        field = RACI_FIELD.get(peran.upper())
+        if not field:
+            raise HTTPException(400, "peran harus R, A, C, atau I")
+        if not scope["anggota_id"]:
+            return []
+        q[field] = scope["anggota_id"]
     rows = await db.tasks.find(q, {"_id": 0}).sort([("urutan", 1), ("created_at", -1)]).to_list(3000)
     return rows
 
 
 @api_router.post("/tasks", response_model=Task)
 async def create_task(payload: TaskBase, user: dict = Depends(get_current_user)):
+    """Buat tugas + tetapkan RACI sekaligus (tanpa langkah 'Pindahkan').
+    R default = pembuat, A default = pembuat. Tugas tersimpan di divisi pembuat (kolom kanban pembuat)."""
     scope = await user_scope(user)
-    # Tugas yang dibuat SELALU masuk ke workspace pembuat sendiri.
-    # Untuk memberi/menugaskan ke orang lain, gunakan fitur "Pindahkan Tugas".
-    if not scope["anggota_id"]:
-        raise HTTPException(403, "Akun Anda belum ditautkan ke anggota. Minta SPV menautkan akun Anda ke salah satu anggota agar bisa membuat tugas di workspace sendiri.")
     data = payload.model_dump()
-    data["pemberi_id"] = scope["anggota_id"]
-    data["penerima_tugas_id"] = scope["anggota_id"]
-    data["divisi_id"] = scope["divisi_id"]
-    # Pastikan list sesuai divisi sendiri (fallback ke list pertama / Backlog)
+    me = scope["anggota_id"]
+    r_id = data.get("penerima_tugas_id") or me
+    a_id = data.get("pemberi_id") or me
+    if not me and not scope["is_spv"]:
+        raise HTTPException(403, "Akun Anda belum ditautkan ke anggota. Minta SPV menautkan akun Anda ke salah satu anggota agar bisa membuat tugas.")
+    if not r_id:
+        raise HTTPException(400, "Pilih R (penanggung kerja).")
+    for aid in {r_id, a_id} - {None}:
+        if not await db.anggota.find_one({"id": aid}, {"_id": 1}):
+            raise HTTPException(400, "Anggota R/A tidak ditemukan.")
+    if me:
+        divisi_id = scope["divisi_id"]
+    else:  # SPV tanpa tautan anggota: tugas masuk ke divisi R
+        r_doc = await db.anggota.find_one({"id": r_id}, {"_id": 0, "divisi_id": 1})
+        divisi_id = r_doc.get("divisi_id") if r_doc else None
+    data.update({"penerima_tugas_id": r_id, "pemberi_id": a_id, "divisi_id": divisi_id, "pemberi_tugas": ""})
+    await _clean_raci(data, r_id, a_id)
+    if r_id != me:
+        data["delegated_at"] = now_iso()
+    # Kolom: harus milik divisi tugas, fallback kolom pertama (Backlog)
     lid = data.get("list_id")
-    if lid:
-        tl = await db.task_lists.find_one({"id": lid, "divisi_id": scope["divisi_id"]}, {"_id": 0, "id": 1})
-        if not tl:
-            lid = None
+    if lid and not await db.task_lists.find_one({"id": lid, "divisi_id": divisi_id}, {"_id": 1}):
+        lid = None
     if not lid:
-        first = await db.task_lists.find_one({"divisi_id": scope["divisi_id"]}, {"_id": 0, "id": 1}, sort=[("urutan", 1)])
-        data["list_id"] = first["id"] if first else None
+        first = await db.task_lists.find_one({"divisi_id": divisi_id, "is_done": {"$ne": True}}, {"_id": 0, "id": 1}, sort=[("urutan", 1)])
+        lid = first["id"] if first else None
+    data["list_id"] = lid
+    data["status"] = "BELUM_MULAI"
     task = Task(**data)
-    await db.tasks.insert_one(task.model_dump())
-    await _log_activity(task.id, user, "create", "Tugas dibuat di workspace sendiri")
+    doc = task.model_dump()
+    if data.get("delegated_at"):
+        doc["delegated_at"] = data["delegated_at"]
+    await db.tasks.insert_one(doc)
+    await _log_activity(task.id, user, "create", f"Tugas dibuat · R: {await _anggota_nama([r_id])} · A: {await _anggota_nama([a_id])}")
+    if data.get("consulted_ids") or data.get("informed_ids"):
+        await _log_raci_changes(task.id, user, {}, {"consulted_ids": data.get("consulted_ids", []), "informed_ids": data.get("informed_ids", [])})
     return task
 
 
@@ -458,27 +581,106 @@ async def get_task(task_id: str, user: dict = Depends(get_current_user)):
     return await _assert_task_access(task_id, user)
 
 
+# ============ STATUS <-> KOLOM KANBAN (satu aturan, dipakai semua endpoint) ============
+# Bucket kolom: "first" = kolom belum-selesai paling kiri, "done" = kolom is_done, "mid" = kolom lain.
+def _status_bucket(status: Optional[str]) -> str:
+    if status == "SELESAI":
+        return "done"
+    if status == "BELUM_MULAI":
+        return "first"
+    return "mid"  # DALAM_PROSES, REVISI, TERKENDALA
+
+
+async def _divisi_lists(divisi_id: Optional[str]) -> List[dict]:
+    if not divisi_id:
+        return []
+    return await db.task_lists.find({"divisi_id": divisi_id}, {"_id": 0}).sort("urutan", 1).to_list(100)
+
+
+def _list_bucket(list_id: Optional[str], lists: List[dict]) -> Optional[str]:
+    tl = next((l for l in lists if l["id"] == list_id), None)
+    if not tl:
+        return None
+    if tl.get("is_done"):
+        return "done"
+    open_lists = [l for l in lists if not l.get("is_done")]
+    return "first" if open_lists and open_lists[0]["id"] == list_id else "mid"
+
+
+def _list_for_bucket(bucket: str, lists: List[dict]) -> Optional[str]:
+    open_lists = [l for l in lists if not l.get("is_done")]
+    done = [l for l in lists if l.get("is_done")]
+    if bucket == "done":
+        return done[0]["id"] if done else None
+    if bucket == "first":
+        return open_lists[0]["id"] if open_lists else None
+    if len(open_lists) >= 2:
+        return open_lists[1]["id"]
+    return open_lists[0]["id"] if open_lists else None
+
+
+async def _sync_status_list(task: dict, update: dict) -> None:
+    """Kolom berubah -> status mengikuti kolom. Hanya status berubah -> pindah ke kolom yang sesuai."""
+    list_changed = "list_id" in update and update["list_id"] != task.get("list_id")
+    status_changed = "status" in update and update["status"] != task.get("status")
+    if not list_changed and not status_changed:
+        return
+    lists = await _divisi_lists(update.get("divisi_id") or task.get("divisi_id"))
+    if list_changed:
+        b = _list_bucket(update["list_id"], lists)
+        if b is None and update["list_id"]:
+            tl = await db.task_lists.find_one({"id": update["list_id"]}, {"_id": 0})
+            if tl:
+                b = _list_bucket(tl["id"], await _divisi_lists(tl.get("divisi_id")))
+        if b == "done":
+            update["status"] = "SELESAI"
+        elif b == "first":
+            update["status"] = "BELUM_MULAI"
+        elif b == "mid":
+            new_status = update.get("status") or task.get("status")
+            # REVISI / TERKENDALA tetap dipertahankan di kolom tengah
+            update["status"] = new_status if new_status in ("DALAM_PROSES", "REVISI", "TERKENDALA") else "DALAM_PROSES"
+        return
+    # hanya status yang berubah
+    want = _status_bucket(update["status"])
+    if _list_bucket(task.get("list_id"), lists) != want:
+        target = _list_for_bucket(want, lists)
+        if target:
+            update["list_id"] = target
+
+
 @api_router.put("/tasks/{task_id}", response_model=Task)
 async def update_task(task_id: str, payload: TaskUpdate, user: dict = Depends(get_current_user)):
     task = await _assert_task_access(task_id, user)
     scope = await user_scope(user)
     update = {k: v for k, v in payload.model_dump().items() if v is not None}
-    # Anggota: kalau hanya sebagai pemberi (bukan penerima) → read-only, tidak boleh update
+    # penerima/pemberi boleh dikirim null secara eksplisit? Tidak: R & A wajib ada.
     if not scope["is_spv"]:
-        my_ang = scope["anggota_id"]
-        is_penerima = my_ang and task.get("penerima_tugas_id") == my_ang
-        is_pemberi = my_ang and task.get("pemberi_id") == my_ang
-        if not is_penerima and is_pemberi:
-            raise HTTPException(403, "Anda hanya pemberi tugas — read-only. Hanya penerima yang dapat mengubah tugas ini.")
-        if "divisi_id" in update and update["divisi_id"] != scope["divisi_id"] and update["divisi_id"] != task.get("divisi_id"):
-            raise HTTPException(403, "Anggota tidak dapat memindahkan tugas ke tim lain.")
-    # Sinkron status otomatis saat list_id berubah (robust untuk semua client):
-    # list is_done → SELESAI; list pertama (urutan<=1) → BELUM_MULAI; lainnya → DALAM_PROSES.
-    if "list_id" in update and "status" not in update:
-        if update["list_id"]:
-            tl = await db.task_lists.find_one({"id": update["list_id"]}, {"_id": 0})
-            if tl:
-                update["status"] = "SELESAI" if tl.get("is_done") else ("BELUM_MULAI" if tl.get("urutan", 99) <= 1 else "DALAM_PROSES")
+        roles = _raci_roles(task, scope["anggota_id"])
+        allowed = set()
+        if "A" in roles:
+            allowed |= FIELDS_A
+        if "R" in roles:
+            allowed |= FIELDS_R
+        if not allowed:
+            raise HTTPException(403, "Peran Anda di tugas ini Consulted/Informed — hanya bisa melihat" + (" dan berkomentar." if "C" in roles else "."))
+        # Form mengirim semua field; buang diam-diam field di luar wewenang peran.
+        update = {k: v for k, v in update.items() if k in allowed}
+    for k in ("penerima_tugas_id", "pemberi_id"):
+        if k in update and not await db.anggota.find_one({"id": update[k]}, {"_id": 1}):
+            raise HTTPException(400, "Anggota R/A tidak ditemukan.")
+    if "consulted_ids" in update or "informed_ids" in update or "penerima_tugas_id" in update or "pemberi_id" in update:
+        r_id = update.get("penerima_tugas_id", task.get("penerima_tugas_id"))
+        a_id = update.get("pemberi_id", task.get("pemberi_id"))
+        update.setdefault("consulted_ids", task.get("consulted_ids") or [])
+        update.setdefault("informed_ids", task.get("informed_ids") or [])
+        await _clean_raci(update, r_id, a_id)
+    if update.get("penerima_tugas_id") and update["penerima_tugas_id"] != task.get("penerima_tugas_id"):
+        update["delegated_at"] = now_iso()
+        update["moved_at"] = now_iso()
+    if update.get("hasil_link") is not None and update.get("hasil_link") != (task.get("hasil_link") or ""):
+        await _log_activity(task_id, user, "hasil", "Link hasil diperbarui")
+    await _sync_status_list(task, update)
     update["updated_at"] = now_iso()
     result = await db.tasks.find_one_and_update(
         {"id": task_id},
@@ -490,6 +692,7 @@ async def update_task(task_id: str, payload: TaskUpdate, user: dict = Depends(ge
         raise HTTPException(404, "Task not found")
     if "status" in update and update["status"] != task.get("status"):
         await _log_activity(task_id, user, "status", f"Status diubah menjadi {update['status']}")
+    await _log_raci_changes(task_id, user, task, update)
     return result
 
 
@@ -506,10 +709,12 @@ async def revisi_task(task_id: str, payload: RevisiPayload, user: dict = Depends
         my_ang = scope["anggota_id"]
         if not my_ang or task.get("pemberi_id") != my_ang or task.get("penerima_tugas_id") == my_ang:
             raise HTTPException(403, "Hanya pemberi tugas yang dapat meminta revisi.")
+    mid_list = _list_for_bucket("mid", await _divisi_lists(task.get("divisi_id")))
     result = await db.tasks.find_one_and_update(
         {"id": task_id},
         {
-            "$set": {"status": "REVISI", "revisi_catatan": payload.catatan, "revisi_at": now_iso(), "updated_at": now_iso()},
+            "$set": {"status": "REVISI", "revisi_catatan": payload.catatan, "revisi_at": now_iso(), "updated_at": now_iso(),
+                     **({"list_id": mid_list} if mid_list else {})},
             "$inc": {"revisi_count": 1},
         },
         return_document=True,
@@ -523,7 +728,9 @@ async def revisi_task(task_id: str, payload: RevisiPayload, user: dict = Depends
 
 @api_router.delete("/tasks/{task_id}")
 async def delete_task(task_id: str, user: dict = Depends(get_current_user)):
-    await _assert_task_access(task_id, user)
+    task = await _assert_task_access(task_id, user)
+    if not _can_manage_task(task, await user_scope(user), "delete"):
+        raise HTTPException(403, "Hanya SPV atau pembuat tugas (yang juga penerimanya) yang dapat menghapus tugas ini. Gunakan Arsip.")
     r = await db.tasks.delete_one({"id": task_id})
     if r.deleted_count == 0:
         raise HTTPException(404, "Task not found")
@@ -534,7 +741,9 @@ async def delete_task(task_id: str, user: dict = Depends(get_current_user)):
 
 @api_router.post("/tasks/{task_id}/archive", response_model=Task)
 async def archive_task(task_id: str, user: dict = Depends(get_current_user)):
-    await _assert_task_access(task_id, user)
+    task = await _assert_task_access(task_id, user)
+    if not _can_manage_task(task, await user_scope(user), "archive"):
+        raise HTTPException(403, "Hanya SPV atau penerima tugas yang dapat mengubah arsip tugas ini.")
     result = await db.tasks.find_one_and_update(
         {"id": task_id},
         {"$set": {"archived": True, "archived_at": now_iso(), "updated_at": now_iso()}},
@@ -548,7 +757,9 @@ async def archive_task(task_id: str, user: dict = Depends(get_current_user)):
 
 @api_router.post("/tasks/{task_id}/unarchive", response_model=Task)
 async def unarchive_task(task_id: str, user: dict = Depends(get_current_user)):
-    await _assert_task_access(task_id, user)
+    task = await _assert_task_access(task_id, user)
+    if not _can_manage_task(task, await user_scope(user), "archive"):
+        raise HTTPException(403, "Hanya SPV atau penerima tugas yang dapat mengubah arsip tugas ini.")
     result = await db.tasks.find_one_and_update(
         {"id": task_id},
         {"$set": {"archived": False, "archived_at": None, "updated_at": now_iso()}},
@@ -576,12 +787,16 @@ async def move_task(task_id: str, payload: MoveTaskPayload, user: dict = Depends
     if payload.penerima_tugas_id is not None and payload.penerima_tugas_id != task.get("penerima_tugas_id"):
         update["penerima_tugas_id"] = payload.penerima_tugas_id
         update["moved_at"] = now_iso()
+        update["delegated_at"] = now_iso()  # dipakai notifikasi "tugas masuk"
+        if not task.get("pemberi_id") and scope["anggota_id"] and scope["anggota_id"] != payload.penerima_tugas_id:
+            update["pemberi_id"] = scope["anggota_id"]  # data lama tanpa pemberi: yang menugaskan = pemberi
     if payload.divisi_id is not None:
         update["divisi_id"] = payload.divisi_id
         if payload.divisi_id != task.get("divisi_id"):
             update["moved_at"] = now_iso()
     if payload.list_id is not None:
         update["list_id"] = payload.list_id
+        await _sync_status_list(task, update)
     if payload.urutan is not None:
         update["urutan"] = payload.urutan
         target_divisi = update.get("divisi_id", task.get("divisi_id"))
@@ -617,6 +832,7 @@ async def bulk_delete_tasks(payload: BulkDeleteRequest, user: dict = Depends(get
     if not payload.ids:
         return {"ok": True, "deleted": 0}
     await _assert_bulk_task_access(payload.ids, user)
+    await _assert_bulk_manage(payload.ids, user, "delete")
     r = await db.tasks.delete_many({"id": {"$in": payload.ids}})
     await db.todo_entries.delete_many({"task_id": {"$in": payload.ids}})
     await db.task_activity.delete_many({"task_id": {"$in": payload.ids}})
@@ -628,6 +844,7 @@ async def bulk_archive_tasks(payload: BulkIdsRequest, user: dict = Depends(get_c
     if not payload.ids:
         return {"ok": True, "archived": 0}
     await _assert_bulk_task_access(payload.ids, user)
+    await _assert_bulk_manage(payload.ids, user, "archive")
     r = await db.tasks.update_many(
         {"id": {"$in": payload.ids}},
         {"$set": {"archived": True, "archived_at": now_iso(), "updated_at": now_iso()}},
@@ -640,6 +857,7 @@ async def bulk_unarchive_tasks(payload: BulkIdsRequest, user: dict = Depends(get
     if not payload.ids:
         return {"ok": True, "unarchived": 0}
     await _assert_bulk_task_access(payload.ids, user)
+    await _assert_bulk_manage(payload.ids, user, "archive")
     r = await db.tasks.update_many(
         {"id": {"$in": payload.ids}},
         {"$set": {"archived": False, "archived_at": None, "updated_at": now_iso()}},
@@ -666,21 +884,37 @@ async def bulk_move_tasks(payload: BulkMoveRequest, user: dict = Depends(get_cur
 
 @api_router.get("/task_unread")
 async def unread_tasks(user: dict = Depends(get_current_user)):
+    # Status "sudah dilihat" disimpan PER USER (dulu moved_at di-null-kan untuk semua orang).
     scope = await user_scope(user)
     q: dict = {"moved_at": {"$ne": None}, "archived": {"$ne": True}}
     if not scope["is_spv"]:
         if not scope["divisi_id"]:
             return {"total": 0, "by_divisi": {}}
         q["divisi_id"] = scope["divisi_id"]
+    seen_doc = await db.user_task_seen.find_one({"user_id": user["user_id"]}, {"_id": 0}) or {}
+    moved_seen = seen_doc.get("moved_seen") or {}
     rows = await db.tasks.find(q, {"_id": 0, "id": 1, "divisi_id": 1, "moved_at": 1}).to_list(3000)
     by_divisi: dict = {}
+    total = 0
     for r in rows:
         d = r.get("divisi_id") or "none"
+        last = max(moved_seen.get(d, ""), moved_seen.get("_all", ""))
+        if r["moved_at"] <= last:
+            continue
         by_divisi[d] = by_divisi.get(d, 0) + 1
-    return {"total": len(rows), "by_divisi": by_divisi}
+        total += 1
+    return {"total": total, "by_divisi": by_divisi}
 
 
 # ============ NOTIFICATIONS (TUGAS MASUK DARI TIM LAIN) ============
+def _delegated_after(ts: str) -> dict:
+    """Waktu delegasi = delegated_at (diisi saat Pindahkan ke orang), fallback created_at untuk data lama."""
+    return {"$or": [
+        {"delegated_at": {"$gt": ts}},
+        {"delegated_at": {"$in": [None]}, "created_at": {"$gt": ts}},
+    ]}
+
+
 @api_router.get("/notifications/incoming")
 async def incoming_notifications(user: dict = Depends(get_current_user)):
     """Tugas yang didelegasikan KE saya oleh orang lain, sejak terakhir dilihat."""
@@ -694,7 +928,7 @@ async def incoming_notifications(user: dict = Depends(get_current_user)):
         "archived": {"$ne": True},
     }
     if seen and seen.get("last_seen_at"):
-        q["created_at"] = {"$gt": seen["last_seen_at"]}
+        q.update(_delegated_after(seen["last_seen_at"]))
     rows = await db.tasks.find(
         q, {"_id": 0, "id": 1, "nama": 1, "pemberi_id": 1, "divisi_id": 1, "created_at": 1, "status": 1}
     ).sort("created_at", -1).to_list(50)
@@ -721,15 +955,14 @@ async def mark_notifications_seen(user: dict = Depends(get_current_user)):
 @api_router.post("/task_mark_seen")
 async def mark_seen_tasks(divisi_id: Optional[str] = None, user: dict = Depends(get_current_user)):
     scope = await user_scope(user)
-    q: dict = {"moved_at": {"$ne": None}}
-    if divisi_id:
-        q["divisi_id"] = divisi_id
+    key = divisi_id or "_all"
     if not scope["is_spv"]:
         if not scope["divisi_id"]:
             return {"ok": True, "cleared": 0}
-        q["divisi_id"] = scope["divisi_id"]
-    r = await db.tasks.update_many(q, {"$set": {"moved_at": None}})
-    return {"ok": True, "cleared": r.modified_count}
+        key = scope["divisi_id"]
+    await db.user_task_seen.update_one(
+        {"user_id": user["user_id"]}, {"$set": {f"moved_seen.{key}": now_iso()}}, upsert=True)
+    return {"ok": True, "cleared": 1}
 
 
 @api_router.post("/tasks/reorder")
@@ -769,7 +1002,7 @@ async def notifications_feed(user: dict = Depends(get_current_user)):
         seen = await db.user_task_seen.find_one({"user_id": scope["user_id"]}, {"_id": 0})
         q = {"penerima_tugas_id": scope["anggota_id"], "pemberi_id": {"$nin": [None, scope["anggota_id"]]}, "archived": {"$ne": True}}
         if seen and seen.get("last_seen_at"):
-            q["created_at"] = {"$gt": seen["last_seen_at"]}
+            q.update(_delegated_after(seen["last_seen_at"]))
         rows = await db.tasks.find(q, {"_id": 0, "id": 1, "nama": 1, "pemberi_id": 1, "divisi_id": 1}).sort("created_at", -1).to_list(50)
         delegated = [{"id": r["id"], "nama": r["nama"], "pemberi_nama": amap.get(r.get("pemberi_id"), "SPV"),
                       "divisi_nama": dmap.get(r.get("divisi_id"), "")} for r in rows]
@@ -794,15 +1027,39 @@ async def notifications_feed(user: dict = Depends(get_current_user)):
             reminders.append({"id": r["id"], "nama": r["nama"], "deadline": dl, "urgensi": urg,
                               "penerima_nama": amap.get(r.get("penerima_tugas_id"), "-"), "divisi_nama": dmap.get(r.get("divisi_id"), "")})
 
-    # 3. Approval user baru (SPV)
+    # 3. Aktivitas pada tugas di mana saya A / C / I (oleh orang lain, sejak terakhir dilihat)
+    aktivitas = []
+    if scope["anggota_id"]:
+        me = scope["anggota_id"]
+        seen2 = await db.user_task_seen.find_one({"user_id": scope["user_id"]}, {"_id": 0}) or {}
+        since = seen2.get("last_seen_at") or (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        my_tasks = await db.tasks.find(
+            {"archived": {"$ne": True}, "$or": [{"pemberi_id": me}, {"consulted_ids": me}, {"informed_ids": me}]},
+            {"_id": 0, "id": 1, "nama": 1, "pemberi_id": 1, "penerima_tugas_id": 1, "consulted_ids": 1, "informed_ids": 1}).to_list(500)
+        tmap = {t["id"]: t for t in my_tasks}
+        if tmap:
+            acts = await db.task_activity.find(
+                {"task_id": {"$in": list(tmap)}, "created_at": {"$gt": since}, "user_id": {"$ne": scope["user_id"]},
+                 "kind": {"$in": ["status", "revisi", "hasil", "raci", "comment", "move"]}},
+                {"_id": 0}).sort("created_at", -1).to_list(30)
+            for a in acts:
+                t = tmap[a["task_id"]]
+                roles = _raci_roles(t, me) - {"R"}
+                if a["kind"] == "comment" and not roles & {"A", "C"}:
+                    continue  # Informed tidak perlu notifikasi komentar
+                aktivitas.append({"id": a["id"], "task_id": t["id"], "nama": t["nama"], "kind": a["kind"], "text": a.get("text", ""),
+                                  "actor_name": a.get("actor_name"), "peran": "".join(sorted(roles)), "created_at": a["created_at"]})
+
+    # 4. Approval user baru (SPV)
     approvals = 0
     if scope["is_spv"]:
         approvals = await db.users.count_documents({"status": "pending"})
 
     urgent = sum(1 for r in reminders if r["urgensi"] in ("overdue", "today"))
-    count = len(delegated) + urgent + approvals
+    count = len(delegated) + urgent + approvals + len(aktivitas)
     role = "spv" if scope["is_spv"] else ("head" if scope["head_divisi_id"] else "anggota")
-    return {"count": count, "delegated": delegated, "reminders": reminders, "approvals": approvals, "role": role}
+    return {"count": count, "delegated": delegated, "reminders": reminders, "approvals": approvals, "role": role,
+            "aktivitas": aktivitas}
 
 
 # ============ TASK ACTIVITY & COMMENTS ============
@@ -815,7 +1072,12 @@ async def task_activity(task_id: str, user: dict = Depends(get_current_user)):
 
 @api_router.post("/tasks/{task_id}/comment")
 async def add_comment(task_id: str, payload: CommentPayload, user: dict = Depends(get_current_user)):
-    await _assert_task_access(task_id, user)
+    task = await _assert_task_access(task_id, user)
+    scope = await user_scope(user)
+    if not scope["is_spv"]:
+        roles = _raci_roles(task, scope["anggota_id"])
+        if not roles & {"R", "A", "C"} and not (task.get("kategori") in RUTIN_KATEGORI_SET and task.get("divisi_id") == scope["divisi_id"]):
+            raise HTTPException(403, "Peran Informed hanya bisa melihat, tidak bisa berkomentar.")
     await _log_activity(task_id, user, "comment", payload.text.strip())
     return {"ok": True}
 
@@ -828,7 +1090,7 @@ async def list_kategori():
 
 
 @api_router.post("/kategori", response_model=Kategori)
-async def create_kategori(payload: KategoriCreate):
+async def create_kategori(payload: KategoriCreate, _: dict = Depends(require_spv)):
     count = await db.kategori.count_documents({})
     item = Kategori(**payload.model_dump(), urutan=count + 1)
     await db.kategori.insert_one(item.model_dump())
@@ -836,7 +1098,7 @@ async def create_kategori(payload: KategoriCreate):
 
 
 @api_router.put("/kategori/{kategori_id}", response_model=Kategori)
-async def update_kategori(kategori_id: str, payload: KategoriCreate):
+async def update_kategori(kategori_id: str, payload: KategoriCreate, _: dict = Depends(require_spv)):
     result = await db.kategori.find_one_and_update(
         {"id": kategori_id}, {"$set": payload.model_dump()},
         return_document=True, projection={"_id": 0},
@@ -847,7 +1109,7 @@ async def update_kategori(kategori_id: str, payload: KategoriCreate):
 
 
 @api_router.delete("/kategori/{kategori_id}")
-async def delete_kategori(kategori_id: str):
+async def delete_kategori(kategori_id: str, _: dict = Depends(require_spv)):
     r = await db.kategori.delete_one({"id": kategori_id})
     await db.tasks.update_many({"kategori_id": kategori_id}, {"$set": {"kategori_id": None}})
     return {"ok": True, "deleted": r.deleted_count}
@@ -1052,8 +1314,13 @@ async def list_task_lists(divisi_id: Optional[str] = None, user: dict = Depends(
 
 
 @api_router.post("/task_lists", response_model=TaskList)
-async def create_task_list(payload: TaskListCreate):
+async def create_task_list(payload: TaskListCreate, user: dict = Depends(get_current_user)):
     data = payload.model_dump()
+    scope = await user_scope(user)
+    if not scope["is_spv"]:
+        if not scope["divisi_id"]:
+            raise HTTPException(403, "Akun belum terhubung ke tim.")
+        data["divisi_id"] = scope["divisi_id"]  # anggota hanya boleh menambah kolom di timnya sendiri
     if not data.get("divisi_id"):
         first = await db.divisi.find_one({}, {"_id": 0}, sort=[("urutan", 1)])
         if first:
@@ -1067,7 +1334,14 @@ async def create_task_list(payload: TaskListCreate):
 
 
 @api_router.put("/task_lists/{list_id}", response_model=TaskList)
-async def update_task_list(list_id: str, payload: TaskListCreate):
+async def update_task_list(list_id: str, payload: TaskListCreate, user: dict = Depends(get_current_user)):
+    scope = await user_scope(user)
+    if not scope["is_spv"]:
+        tl = await db.task_lists.find_one({"id": list_id}, {"_id": 0, "divisi_id": 1})
+        if not tl or not scope["divisi_id"] or tl.get("divisi_id") != scope["divisi_id"]:
+            raise HTTPException(403, "Kolom ini milik tim lain.")
+        if payload.divisi_id and payload.divisi_id != scope["divisi_id"]:
+            raise HTTPException(403, "Tidak bisa memindahkan kolom ke tim lain.")
     update = {k: v for k, v in payload.model_dump().items() if v is not None}
     result = await db.task_lists.find_one_and_update(
         {"id": list_id},
@@ -1081,7 +1355,12 @@ async def update_task_list(list_id: str, payload: TaskListCreate):
 
 
 @api_router.delete("/task_lists/{list_id}")
-async def delete_task_list(list_id: str):
+async def delete_task_list(list_id: str, user: dict = Depends(get_current_user)):
+    scope = await user_scope(user)
+    if not scope["is_spv"]:
+        tl = await db.task_lists.find_one({"id": list_id}, {"_id": 0, "divisi_id": 1})
+        if not tl or scope["head_divisi_id"] != tl.get("divisi_id"):
+            raise HTTPException(403, "Hanya SPV atau kepala divisi yang dapat menghapus kolom.")
     r = await db.task_lists.delete_one({"id": list_id})
     await db.tasks.update_many({"list_id": list_id}, {"$set": {"list_id": None}})
     return {"ok": True, "deleted": r.deleted_count}
@@ -1102,7 +1381,7 @@ async def create_task_label(payload: TaskLabelCreate):
 
 
 @api_router.put("/task_labels/{label_id}", response_model=TaskLabel)
-async def update_task_label(label_id: str, payload: TaskLabelCreate):
+async def update_task_label(label_id: str, payload: TaskLabelCreate, _: dict = Depends(require_spv)):
     result = await db.task_labels.find_one_and_update(
         {"id": label_id},
         {"$set": payload.model_dump()},
@@ -1115,7 +1394,7 @@ async def update_task_label(label_id: str, payload: TaskLabelCreate):
 
 
 @api_router.delete("/task_labels/{label_id}")
-async def delete_task_label(label_id: str):
+async def delete_task_label(label_id: str, _: dict = Depends(require_spv)):
     r = await db.task_labels.delete_one({"id": label_id})
     await db.tasks.update_many({}, {"$pull": {"label_ids": label_id}})
     return {"ok": True, "deleted": r.deleted_count}
@@ -1314,94 +1593,129 @@ async def upsert_entry(payload: AmaliyahEntryCreate, user: dict = Depends(get_cu
 
 
 # ============ RAPORT ROUTES ============
-async def _raport_summary_impl(start: Optional[str], end: Optional[str], user: dict, anggota_id: Optional[str] = None) -> dict:
-    scope = await user_scope(user)
-    # Task query
-    task_query: dict = {}
-    if start or end:
-        task_query["created_at"] = {}
-        if start:
-            task_query["created_at"]["$gte"] = start
-        if end:
-            task_query["created_at"]["$lte"] = end + "T23:59:59"
+RUTIN_KATEGORI = ("HARIAN", "MINGGUAN", "BULANAN")
+RUTIN_KATEGORI_SET = set(RUTIN_KATEGORI)
 
-    all_tasks = await db.tasks.find(task_query, {"_id": 0}).to_list(5000)
-    if not scope["is_spv"]:
-        all_tasks = [t for t in all_tasks if t.get("divisi_id") == scope["divisi_id"]] if scope["divisi_id"] else []
+
+def _amaliyah_target_per_item(target_metrik: str, days: int) -> int:
+    """target_metrik berupa teks bebas. 'minggu/pekan' -> mingguan, 'bulan' -> bulanan, selain itu harian."""
+    t = (target_metrik or "").lower()
+    if "minggu" in t or "pekan" in t:
+        return max(1, -(-days // 7))
+    if "bulan" in t:
+        return max(1, -(-days // 30))
+    return days
+
+
+async def _raport_summary_impl(start: Optional[str], end: Optional[str], user: dict, anggota_id: Optional[str] = None) -> dict:
+    """Raport = 60% tugas + 40% amaliyah.
+    - Tugas: non-rutin, dihitung dari DEADLINE dalam periode (tanpa deadline: tanggal dibuat). Rutin dilacak di Tugas Rutin Tracker.
+    - Individu: semua tugas dengan penerima = anggota itu (termasuk delegasi lintas divisi).
+    - Relasi orang: users.anggota_id (satu anggota bisa tertaut ke >1 akun).
+    - Bila satu komponen tidak punya data, skor gabungan memakai komponen yang ada saja.
+    """
+    scope = await user_scope(user)
+    today = date.today().isoformat()
+    if not start or not end:
+        end_d = date.today()
+        start_d = end_d - timedelta(days=29)
+        start = start or start_d.isoformat()
+        end = end or end_d.isoformat()
+    try:
+        days = max((date.fromisoformat(end[:10]) - date.fromisoformat(start[:10])).days + 1, 1)
+    except Exception:
+        days = 30
+
+    # Anggota sendiri bila non-SPV tanpa anggota_id (dulu: seluruh tugas divisi tercampur amaliyah pribadi)
+    if not anggota_id and not scope["is_spv"]:
+        anggota_id = scope["anggota_id"] or "__none__"
 
     ang = None
     div_nama = None
     if anggota_id:
         ang = await db.anggota.find_one({"id": anggota_id}, {"_id": 0})
-        if ang:
-            all_tasks = [t for t in all_tasks if t.get("penerima_tugas_id") == anggota_id]
-            div = await db.divisi.find_one({"id": ang.get("divisi_id")}, {"_id": 0}) if ang.get("divisi_id") else None
+        if ang and ang.get("divisi_id"):
+            div = await db.divisi.find_one({"id": ang["divisi_id"]}, {"_id": 0, "nama": 1})
             div_nama = div.get("nama") if div else None
+
+    # ---- Tugas
+    period_q = {"$or": [
+        {"deadline": {"$gte": start, "$lte": end}},
+        {"deadline": {"$in": [None, ""]}, "created_at": {"$gte": start, "$lte": end + "T23:59:59"}},
+    ]}
+    task_query: dict = {"archived": {"$ne": True}, "kategori": {"$nin": list(RUTIN_KATEGORI)}, **period_q}
+    if anggota_id:
+        task_query["penerima_tugas_id"] = anggota_id
+    all_tasks = await db.tasks.find(task_query, {"_id": 0}).to_list(5000)
 
     total = len(all_tasks)
     selesai = sum(1 for t in all_tasks if t.get("status") == "SELESAI")
-    dalam_proses = sum(1 for t in all_tasks if t.get("status") == "DALAM_PROSES")
+    dalam_proses = sum(1 for t in all_tasks if t.get("status") in ("DALAM_PROSES", "REVISI"))
     terkendala = sum(1 for t in all_tasks if t.get("status") == "TERKENDALA")
     belum_mulai = sum(1 for t in all_tasks if t.get("status") == "BELUM_MULAI")
-    today = date.today().isoformat()
-    overdue = sum(1 for t in all_tasks if t.get("deadline") and t.get("deadline") < today and t.get("status") != "SELESAI")
+    overdue = sum(1 for t in all_tasks if t.get("deadline") and t["deadline"] < today and t.get("status") != "SELESAI")
     task_score = round((selesai / total * 100) if total else 0, 1)
 
-    # Amaliyah
-    entry_q: dict = {"checked": True}
-    if start or end:
-        entry_q["tanggal"] = {}
-        if start:
-            entry_q["tanggal"]["$gte"] = start
-        if end:
-            entry_q["tanggal"]["$lte"] = end
-    if anggota_id and ang and ang.get("user_id"):
-        entry_q["user_id"] = ang["user_id"]
-    elif anggota_id:
-        # anggota belum di-link → no entries
-        entry_q["user_id"] = "__none__"
-    elif not scope["is_spv"]:
-        entry_q["user_id"] = scope["user_id"]
-    entries = await db.amaliyah_entries.count_documents(entry_q)
-    items_count = await db.amaliyah_items.count_documents({})
+    # ---- Amaliyah
+    items = await db.amaliyah_items.find({"aktif": {"$ne": False}}, {"_id": 0, "id": 1, "target_metrik": 1}).to_list(200)
+    item_ids = [i["id"] for i in items]
+    target_per_user = sum(_amaliyah_target_per_item(i.get("target_metrik", ""), days) for i in items)
+    if anggota_id:
+        users = await db.users.find({"anggota_id": anggota_id, "status": "approved"}, {"_id": 0, "user_id": 1}).to_list(20)
+        participant_ids = [u["user_id"] for u in users]
+        n_participants = 1 if participant_ids else 0  # beberapa akun untuk 1 orang = 1 peserta
+    else:
+        users = await db.users.find({"anggota_id": {"$nin": [None, ""]}, "status": "approved"}, {"_id": 0, "user_id": 1, "anggota_id": 1}).to_list(1000)
+        participant_ids = [u["user_id"] for u in users]
+        n_participants = len({u["anggota_id"] for u in users})
+    entry_q = {"checked": True, "tanggal": {"$gte": start, "$lte": end}, "item_id": {"$in": item_ids},
+               "user_id": {"$in": participant_ids or ["__none__"]}}
+    # 1 check-in per (anggota, item, tanggal) — akun ganda tidak dihitung dua kali
+    u2a = {u["user_id"]: (u.get("anggota_id") or anggota_id) for u in users}
+    rows = await db.amaliyah_entries.find(entry_q, {"_id": 0, "user_id": 1, "item_id": 1, "tanggal": 1}).to_list(100000)
+    entries = len({(u2a.get(r["user_id"]), r["item_id"], r["tanggal"]) for r in rows})
+    target = target_per_user * n_participants
+    amaliyah_score = round(min(entries / target * 100, 100) if target else 0, 1)
 
-    days = 30
-    if start and end:
-        try:
-            d1 = datetime.fromisoformat(start).date()
-            d2 = datetime.fromisoformat(end).date()
-            days = max((d2 - d1).days + 1, 1)
-        except Exception:
-            days = 30
-    target = items_count * days if items_count else 1
-    amaliyah_score = round((entries / target * 100) if target else 0, 1)
-    combined = round((task_score * 0.6 + amaliyah_score * 0.4), 1)
-    if combined >= 80:
+    # ---- Gabungan
+    # Ada aktivitas (tugas atau check-in) -> amaliyah 0 dihitung sebagai 0, bukan "tanpa data".
+    has_task = total > 0
+    data_cukup = has_task or entries > 0
+    if has_task and target > 0:
+        combined = round(task_score * 0.6 + amaliyah_score * 0.4, 1)
+    elif has_task:
+        combined = task_score
+    elif entries > 0:
+        combined = amaliyah_score
+    else:
+        combined = 0
+    if not data_cukup:
+        auto_rec = "NETRAL"  # belum ada data != kinerja buruk
+    elif combined >= 80:
         auto_rec = "REWARD"
     elif combined < 50:
         auto_rec = "EVALUASI"
     else:
         auto_rec = "NETRAL"
 
-    note_key = {"id": f"anggota:{anggota_id}"} if anggota_id else {"id": "singleton"}
+    note_key = {"id": f"anggota:{anggota_id}"} if anggota_id and anggota_id != "__none__" else {"id": "singleton"}
     note = await db.raport_notes.find_one(note_key, {"_id": 0}) or {
-        **note_key,
-        "catatan_spv": "",
-        "rekomendasi": "NETRAL",
-        "updated_at": now_iso(),
+        **note_key, "catatan_spv": "", "rekomendasi": "NETRAL", "updated_at": now_iso(),
     }
 
     result = {
+        "periode": {"start": start, "end": end, "days": days},
         "task": {"total": total, "selesai": selesai, "dalam_proses": dalam_proses, "terkendala": terkendala,
                  "belum_mulai": belum_mulai, "overdue": overdue, "score": task_score},
-        "amaliyah": {"total_entries": entries, "target": target, "items_count": items_count, "days": days, "score": amaliyah_score},
+        "amaliyah": {"total_entries": entries, "target": target, "items_count": len(items), "days": days,
+                     "peserta": n_participants, "score": amaliyah_score},
         "combined_score": combined,
         "auto_rekomendasi": auto_rec,
+        "data_cukup": data_cukup,
         "spv_note": note,
     }
     if anggota_id and ang:
         result["anggota"] = {"id": ang["id"], "nama": ang.get("nama"), "divisi_nama": div_nama}
-        # Include task list for PDF
         result["tasks_list"] = sorted(all_tasks, key=lambda x: (x.get("deadline") or "9999", x.get("nama") or ""))
     return result
 
@@ -1412,8 +1726,7 @@ async def raport_summary(start: Optional[str] = None, end: Optional[str] = None,
     if anggota_id:
         scope = await user_scope(user)
         if not scope["is_spv"]:
-            own = await db.anggota.find_one({"id": anggota_id, "user_id": user.get("user_id")}, {"_id": 0})
-            if not own:
+            if anggota_id != scope["anggota_id"]:
                 raise HTTPException(403, "Hanya SPV yang bisa melihat raport anggota lain.")
     return await _raport_summary_impl(start, end, user, anggota_id)
 
@@ -1691,7 +2004,7 @@ async def global_search(q: str = "", user: dict = Depends(get_current_user)):
     if len(q) < 2:
         return {"tasks": [], "amaliyah": [], "anggota": [], "divisi": []}
     scope = await user_scope(user)
-    regex = {"$regex": q, "$options": "i"}
+    regex = {"$regex": re.escape(q), "$options": "i"}
 
     # Tasks
     task_q = {"nama": regex, "archived": {"$ne": True}}
@@ -1753,7 +2066,6 @@ app.add_middleware(
     CORSMiddleware,
     allow_credentials=_allow_credentials,
     allow_origins=_cors_origins,
-    allow_origin_regex=r"https://.*\.preview\.emergentagent\.com",
     allow_methods=["*"],
     allow_headers=["*"],
 )

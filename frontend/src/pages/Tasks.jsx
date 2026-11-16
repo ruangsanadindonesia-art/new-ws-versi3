@@ -14,6 +14,7 @@ import {
   importExcel, anggotaAnalytics, revisiTask,
 } from "@/lib/api";
 import KanbanBoard from "./tasks/KanbanBoard";
+import { RACI, RoleTag } from "./tasks/raci";
 import TableView from "./tasks/TableView";
 import {
   TaskDialog, MoveTaskDialog, BulkMoveDialog,
@@ -22,7 +23,7 @@ import {
 
 const emptyForm = {
   nama: "", kategori: "PROJECT", status: "BELUM_MULAI",
-  pemberi_tugas: "", penerima_tugas: "", penerima_tugas_id: null,
+  penerima_tugas: "", penerima_tugas_id: null, pemberi_id: null, consulted_ids: [], informed_ids: [],
   tanggal_mulai: "", deadline: "",
   catatan_tim: "", divisi_id: null, list_id: null, label_ids: [],
   brief_link: "", hasil_link: "", hasil_catatan: "",
@@ -43,7 +44,8 @@ export default function Tasks() {
   const [anggotaAll, setAnggotaAll] = useState([]);
   const [allListsMap, setAllListsMap] = useState({});
   const [arsipMode, setArsipMode] = useState(false);
-  const [view, setView] = useState("board");
+  const [view, setView] = useState("table");
+  const [peran, setPeran] = useState("ALL"); // R | A | C | I — tugas lintas tim di mana saya memegang peran itu
   const [filter, setFilter] = useState({ search: "", list_id: "ALL", label_id: "ALL", penerima_id: "ALL" });
   const [selectedIds, setSelectedIds] = useState([]);
   const [presets, setPresets] = useState(() => {
@@ -83,11 +85,13 @@ export default function Tasks() {
     setAllListsMap(map);
   };
 
+  const taskQuery = () => (peran !== "ALL" ? { peran, archived: arsipMode } : { divisi_id: divisiId, archived: arsipMode });
+
   useEffect(() => {
     if (!divisiId) return;
     (async () => {
       const [t, l] = await Promise.all([
-        listTasks({ divisi_id: divisiId, archived: arsipMode }),
+        listTasks(taskQuery()),
         listTaskLists({ divisi_id: divisiId }),
       ]);
       setTasks(t); setLists(l); setSelectedIds([]);
@@ -95,12 +99,12 @@ export default function Tasks() {
     })();
     refreshAllListsMap();
     // eslint-disable-next-line
-  }, [divisiId, arsipMode]);
+  }, [divisiId, arsipMode, peran]);
 
   const refresh = async () => {
     if (!divisiId) return;
     const [t, l] = await Promise.all([
-      listTasks({ divisi_id: divisiId, archived: arsipMode }),
+      listTasks(taskQuery()),
       listTaskLists({ divisi_id: divisiId }),
     ]);
     setTasks(t); setLists(l); refreshAllListsMap();
@@ -122,8 +126,8 @@ export default function Tasks() {
     return true;
   }), [tasks, filter]);
 
-  const openNew = () => { setEditing(null); setForm({ ...emptyForm, divisi_id: divisiId, list_id: lists[0]?.id || null }); setTaskDialogOpen(true); };
-  const openEdit = (t) => { setEditing(t); setForm({ ...emptyForm, ...t, tanggal_mulai: t.tanggal_mulai || "", deadline: t.deadline || "", label_ids: t.label_ids || [] }); setTaskDialogOpen(true); };
+  const openNew = () => { setEditing(null); setForm({ ...emptyForm, divisi_id: divisiId, list_id: lists.find((l) => !l.is_done)?.id || null, penerima_tugas_id: myAnggotaId, pemberi_id: myAnggotaId }); setTaskDialogOpen(true); };
+  const openEdit = (t) => { setEditing(t); setForm({ ...emptyForm, ...t, tanggal_mulai: t.tanggal_mulai || "", deadline: t.deadline || "", label_ids: t.label_ids || [], consulted_ids: t.consulted_ids || [], informed_ids: t.informed_ids || [] }); setTaskDialogOpen(true); };
   const openMove = (t) => { setMoveTaskState(t); setMoveOpen(true); };
 
   const submit = async () => {
@@ -135,8 +139,10 @@ export default function Tasks() {
       if (editing) { await updateTask(editing.id, payload); toast.success("Tugas diperbarui"); }
       else {
         delete payload.catatan_spv; delete payload.link_output;
-        await createTask(payload);
-        toast.success("Tugas baru masuk ke workspace Anda");
+        if (!payload.penerima_tugas_id) return toast.error("Pilih R (yang mengerjakan)");
+        const created = await createTask(payload);
+        const rNama = anggotaMap[created.penerima_tugas_id]?.nama;
+        toast.success(created.penerima_tugas_id === myAnggotaId ? "Tugas dibuat" : `Tugas dibuat dan ditugaskan ke ${rNama || "R"}`);
         // Backend memaksa tugas ke divisi pembuat — pindah ke board sendiri agar terlihat
         if (myDivisiId && divisiId !== myDivisiId) { setDivisiId(myDivisiId); setTaskDialogOpen(false); return; }
       }
@@ -146,7 +152,9 @@ export default function Tasks() {
 
   const saveCell = async (id, patch) => {
     setTasks((prev) => prev.map((t) => t.id === id ? { ...t, ...patch } : t));
-    try { await updateTask(id, patch); } catch (e) { toast.error(formatApiErr(e)); refresh(); }
+    // Pakai hasil dari server: server bisa menolak sebagian field sesuai peran RACI, atau menyinkronkan status/kolom.
+    try { const saved = await updateTask(id, patch); setTasks((prev) => prev.map((t) => t.id === id ? saved : t)); }
+    catch (e) { toast.error(formatApiErr(e)); refresh(); }
   };
 
   const submitRevisi = async (taskId, catatan) => {
@@ -266,7 +274,7 @@ export default function Tasks() {
                 <MiniSelect value={filter.label_id} onChange={(v) => setFilter({ ...filter, label_id: v })} options={[{ id: "ALL", nama: "Semua" }, ...labels]} testId="filter-label" />
               </div>
               <div>
-                <label className="text-[10px] text-emerald-800/70">Penerima</label>
+                <label className="text-[10px] text-emerald-800/70">Mengerjakan (R)</label>
                 <MiniSelect value={filter.penerima_id} onChange={(v) => setFilter({ ...filter, penerima_id: v })} options={[{ id: "ALL", nama: "Semua" }, ...filteredAnggotaCurrent]} testId="filter-penerima" />
               </div>
               {filterActive && (
@@ -298,6 +306,19 @@ export default function Tasks() {
           </PopoverContent>
         </Popover>
 
+        {myAnggotaId && (
+          <div className="flex items-center gap-1 rounded-lg border border-emerald-200 bg-white p-1" data-testid="peran-filter">
+            <span className="px-1.5 text-[11px] font-medium text-emerald-800/70">Peran saya</span>
+            {["ALL", "R", "A", "C", "I"].map((k) => (
+              <button key={k} onClick={() => setPeran(k)} title={k === "ALL" ? "Semua tugas di tim ini" : `${RACI[k].nama}: ${RACI[k].arti}`}
+                data-testid={`peran-${k}`}
+                className={`rounded-md px-2 py-1 text-xs font-semibold ${peran === k ? "bg-emerald-900 text-white" : "text-emerald-800 hover:bg-emerald-50"}`}>
+                {k === "ALL" ? "Semua" : k}
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="flex rounded-lg border border-emerald-200 bg-white p-1">
           <button data-testid="view-board" onClick={() => setView("board")}
             className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium ${view === "board" ? "bg-emerald-900 text-white" : "text-emerald-800"}`}><LayoutGrid size={13} /> Kanban</button>
@@ -307,6 +328,13 @@ export default function Tasks() {
 
         <Button onClick={openNew} data-testid="add-task-button" className="bg-emerald-900 text-white hover:bg-emerald-800 h-9"><Plus size={16} /> Tugas Baru</Button>
       </div>
+
+      {peran !== "ALL" && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900" data-testid="peran-banner">
+          <RoleTag role={peran} /> Menampilkan semua tugas (lintas tim) di mana Anda <b>{RACI[peran].nama}</b> — {RACI[peran].arti.toLowerCase()}.
+          <button onClick={() => setPeran("ALL")} className="ml-auto font-semibold underline">Kembali ke tim</button>
+        </div>
+      )}
 
       {/* Bulk Toolbar */}
       {selectedIds.length > 0 && (
@@ -332,7 +360,7 @@ export default function Tasks() {
         <TableView tasks={filtered} lists={lists} labels={labels} anggotaAll={anggotaAll} divisiList={divisiList} currentDivisiId={divisiId}
           selectedIds={selectedIds} setSelectedIds={setSelectedIds}
           onSaveCell={saveCell} onEdit={openEdit} onMove={openMove} onArchive={archive} onUnarchive={unarchive} onDelete={remove}
-          onReorderLocal={onReorderLocal} arsipMode={arsipMode} isSpv={isSpv}
+          onReorderLocal={onReorderLocal} arsipMode={arsipMode} isSpv={isSpv} myAnggotaId={myAnggotaId}
           refreshLists={refreshLists} refreshLabels={refreshLabels} refreshAnggota={refreshAnggota} />
       )}
 
