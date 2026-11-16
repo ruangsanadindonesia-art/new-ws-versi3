@@ -12,14 +12,14 @@ import { RoleTag, raciRoles, PersonSelect, PeopleSelect, RaciLegend } from "./ra
 import { reorderTasks, createTaskList, updateTaskList, deleteTaskList, createTaskLabel, updateTaskLabel, deleteTaskLabel } from "@/lib/api";
 import { toast } from "sonner";
 
-const STATUS_LABELS = { BELUM_MULAI: "Belum Mulai", DALAM_PROSES: "Dalam Proses", SELESAI: "Selesai", TERKENDALA: "Terkendala", REVISI: "Revisi" };
-const STATUS_COLORS = { BELUM_MULAI: "bg-slate-100 text-slate-700", DALAM_PROSES: "bg-amber-100 text-amber-800", SELESAI: "bg-emerald-100 text-emerald-800", TERKENDALA: "bg-orange-100 text-orange-800", REVISI: "bg-red-100 text-red-700" };
+const STATUS_LABELS = { BELUM_MULAI: "Belum Mulai", DALAM_PROSES: "Dalam Proses", MENUNGGU_REVIEW: "Menunggu review", SELESAI: "Selesai", TERKENDALA: "Terkendala", REVISI: "Revisi" };
+const STATUS_COLORS = { BELUM_MULAI: "bg-slate-100 text-slate-700", DALAM_PROSES: "bg-amber-100 text-amber-800", MENUNGGU_REVIEW: "bg-violet-100 text-violet-800", SELESAI: "bg-emerald-100 text-emerald-800", TERKENDALA: "bg-orange-100 text-orange-800", REVISI: "bg-red-100 text-red-700" };
 
 export default function TableView({
   tasks, lists, labels, anggotaAll, divisiList, currentDivisiId,
   selectedIds, setSelectedIds,
   onSaveCell, onEdit, onMove, onArchive, onUnarchive, onDelete, onReorderLocal, arsipMode,
-  refreshLists, refreshLabels, refreshAnggota, isSpv = true, myAnggotaId = null,
+  refreshLists, refreshLabels, refreshAnggota, isSpv = true, myAnggotaId = null, onSetujui = null, emptyText = "Tidak ada tugas.",
 }) {
   const listMap = Object.fromEntries(lists.map((l) => [l.id, l]));
   const labelMap = Object.fromEntries(labels.map((l) => [l.id, l]));
@@ -87,11 +87,11 @@ export default function TableView({
                     selected={selectedIds.includes(t.id)} anySelected={anySelected}
                     onToggleSelect={() => toggleSelect(t.id)} onSaveCell={onSaveCell}
                     onEdit={onEdit} onMove={onMove} onArchive={onArchive} onUnarchive={onUnarchive} onDelete={onDelete}
-                    arsipMode={arsipMode} isSpv={isSpv} myAnggotaId={myAnggotaId}
+                    arsipMode={arsipMode} isSpv={isSpv} myAnggotaId={myAnggotaId} onSetujui={onSetujui}
                     refreshLists={refreshLists} refreshLabels={refreshLabels} refreshAnggota={refreshAnggota} />
                 ))}
                 {tasks.length === 0 && (
-                  <tr><td colSpan={12} className="p-8 text-center text-sm text-emerald-800/60">Tidak ada tugas.</td></tr>
+                  <tr><td colSpan={12} className="p-8 text-center text-sm text-emerald-800/60">{emptyText}</td></tr>
                 )}
               </tbody>
             </SortableContext>
@@ -151,7 +151,7 @@ function ColumnHeader({ label, items, onCreate, onUpdate, onDelete, refresh }) {
   );
 }
 
-function Row({ task, idx, lists, labels, labelMap, listMap, anggotaAll, anggotaMap, divisiList, currentDivisiId, selected, anySelected, onToggleSelect, onSaveCell, onEdit, onMove, onArchive, onUnarchive, onDelete, arsipMode, isSpv = true, myAnggotaId = null, refreshLists, refreshLabels, refreshAnggota }) {
+function Row({ task, idx, lists, labels, labelMap, listMap, anggotaAll, anggotaMap, divisiList, currentDivisiId, selected, anySelected, onToggleSelect, onSaveCell, onEdit, onMove, onArchive, onUnarchive, onDelete, arsipMode, isSpv = true, myAnggotaId = null, onSetujui = null, refreshLists, refreshLabels, refreshAnggota }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
   const isRutin = task.kategori !== "PROJECT";
@@ -220,7 +220,7 @@ function Row({ task, idx, lists, labels, labelMap, listMap, anggotaAll, anggotaM
           <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-purple-100 px-2.5 py-1 text-[11px] font-semibold text-purple-800">
             <Repeat size={10} /> On Tracker
           </span>
-        ) : task.list_id && !listMap[task.list_id] ? (
+        ) : (task.list_id && !listMap[task.list_id]) || ["MENUNGGU_REVIEW", "REVISI", "TERKENDALA"].includes(task.status) ? (
           // List milik divisi lain (delegasi) → tampilkan status sebagai badge statis
           <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ${STATUS_COLORS[task.status] || STATUS_COLORS.BELUM_MULAI}`} data-testid={`row-status-${task.id}`}>
             {STATUS_LABELS[task.status] || task.status}
@@ -278,6 +278,10 @@ function Row({ task, idx, lists, labels, labelMap, listMap, anggotaAll, anggotaM
           <p className="mt-1 line-clamp-2 break-words text-[10px] text-emerald-800/70">{task.hasil_catatan}</p>
         ) : null}
         {!task.hasil_link && !task.hasil_catatan && <span className="text-xs text-emerald-800/30">—</span>}
+        {task.status === "MENUNGGU_REVIEW" && canDef && onSetujui && (
+          <button onClick={() => onSetujui(task.id)} data-testid={`row-setujui-${task.id}`}
+            className="mt-1 block rounded-full bg-emerald-700 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-emerald-800">Setujui</button>
+        )}
       </td>
     </tr>
   );

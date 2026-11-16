@@ -250,7 +250,7 @@ export default function Raport() {
           </div>
           <p className="mt-4 text-sm text-emerald-800/70">
             <span className="font-semibold text-emerald-900">{a.total_entries}</span> check-in tercatat dari target{" "}
-            <span className="font-semibold text-emerald-900">{a.target}</span> ({a.items_count} amaliyah × {a.days} hari)
+            <span className="font-semibold text-emerald-900">{a.target}</span> ({a.items_count} amaliyah × {a.days} hari{a.peserta > 1 ? ` × ${a.peserta} orang` : ""})
           </p>
           {isIndividu && a.total_entries === 0 && (
             <p className="mt-2 rounded border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-800">

@@ -76,7 +76,7 @@ def build_monitoring_router(db: AsyncIOMotorDatabase, get_current_user, user_sco
         for a in anggota:
             base = {"penerima_tugas_id": a["id"], "archived": {"$ne": True}}
             active = await db.tasks.count_documents({**base, "status": {"$ne": "SELESAI"}})
-            proses = await db.tasks.count_documents({**base, "status": "DALAM_PROSES"})
+            proses = await db.tasks.count_documents({**base, "status": {"$in": ["DALAM_PROSES", "MENUNGGU_REVIEW", "REVISI"]}})
             kendala = await db.tasks.count_documents({**base, "status": "TERKENDALA"})
             belum = await db.tasks.count_documents({**base, "status": "BELUM_MULAI"})
             overdue = await db.tasks.count_documents({**base, "status": {"$ne": "SELESAI"}, "deadline": {"$lt": _today(), "$ne": None}})
@@ -133,7 +133,7 @@ def build_monitoring_router(db: AsyncIOMotorDatabase, get_current_user, user_sco
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         stg_q = {
             "archived": {"$ne": True},
-            "status": {"$in": ["BELUM_MULAI", "DALAM_PROSES", "TERKENDALA"]},
+            "status": {"$in": ["BELUM_MULAI", "DALAM_PROSES", "TERKENDALA", "REVISI", "MENUNGGU_REVIEW"]},
             "updated_at": {"$lt": cutoff},
         }
         if not g["is_spv"]:
@@ -182,7 +182,7 @@ def build_monitoring_router(db: AsyncIOMotorDatabase, get_current_user, user_sco
             base = {"divisi_id": d["id"], "archived": {"$ne": True}}
             cells = {
                 "BELUM_MULAI": await db.tasks.count_documents({**base, "status": "BELUM_MULAI"}),
-                "DALAM_PROSES": await db.tasks.count_documents({**base, "status": "DALAM_PROSES"}),
+                "DALAM_PROSES": await db.tasks.count_documents({**base, "status": {"$in": ["DALAM_PROSES", "MENUNGGU_REVIEW", "REVISI"]}}),
                 "TERKENDALA": await db.tasks.count_documents({**base, "status": "TERKENDALA"}),
                 "SELESAI": await db.tasks.count_documents({**base, "status": "SELESAI"}),
                 "OVERDUE": await db.tasks.count_documents({**base, "status": {"$ne": "SELESAI"}, "deadline": {"$lt": today, "$ne": None}}),
@@ -220,7 +220,7 @@ def build_monitoring_router(db: AsyncIOMotorDatabase, get_current_user, user_sco
         # Workload
         aktif = await db.tasks.count_documents({**base, "status": {"$ne": "SELESAI"}})
         selesai = await db.tasks.count_documents({**base, "status": "SELESAI"})
-        proses = await db.tasks.count_documents({**base, "status": "DALAM_PROSES"})
+        proses = await db.tasks.count_documents({**base, "status": {"$in": ["DALAM_PROSES", "MENUNGGU_REVIEW", "REVISI"]}})
         kendala = await db.tasks.count_documents({**base, "status": "TERKENDALA"})
         belum = await db.tasks.count_documents({**base, "status": "BELUM_MULAI"})
         total = aktif + selesai
@@ -228,7 +228,7 @@ def build_monitoring_router(db: AsyncIOMotorDatabase, get_current_user, user_sco
 
         # Stagnant tasks (user-scoped)
         cutoff = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
-        stg = await db.tasks.find({**base, "status": {"$in": ["BELUM_MULAI", "DALAM_PROSES", "TERKENDALA"]}, "updated_at": {"$lt": cutoff}}, {"_id": 0}).sort("updated_at", 1).to_list(100)
+        stg = await db.tasks.find({**base, "status": {"$in": ["BELUM_MULAI", "DALAM_PROSES", "TERKENDALA", "REVISI", "MENUNGGU_REVIEW"]}, "updated_at": {"$lt": cutoff}}, {"_id": 0}).sort("updated_at", 1).to_list(100)
         stg_out = []
         for r in stg:
             try:

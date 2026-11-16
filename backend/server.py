@@ -153,7 +153,7 @@ class TaskBase(BaseModel):
     nama: str
     kategori: str = "HARIAN"  # HARIAN | MINGGUAN | BULANAN | PROJECT
     frekuensi: str = "RUTIN"  # RUTIN | TIDAK RUTIN | SEKALI
-    status: str = "BELUM_MULAI"  # BELUM_MULAI | DALAM_PROSES | SELESAI | TERKENDALA
+    status: str = "BELUM_MULAI"  # BELUM_MULAI | DALAM_PROSES | MENUNGGU_REVIEW | REVISI | TERKENDALA | SELESAI
     pemberi_tugas: Optional[str] = ""
     penerima_tugas: Optional[str] = ""
     tanggal_mulai: Optional[str] = None  # ISO date
@@ -411,8 +411,13 @@ RACI_FIELD = {"R": "penerima_tugas_id", "A": "pemberi_id", "C": "consulted_ids",
 # Field yang boleh diubah tiap peran (SPV boleh semua). Field lain dari form dibuang diam-diam.
 FIELDS_A = {"nama", "kategori", "tanggal_mulai", "deadline", "label_ids", "brief_link", "catatan_tim",
             "penerima_tugas_id", "pemberi_id", "consulted_ids", "informed_ids", "kategori_id"}
-FIELDS_R = {"status", "list_id", "urutan", "hasil_link", "hasil_catatan", "catatan_tim", "label_ids",
-            "tanggal_mulai"}
+FIELDS_R = {"status", "list_id", "urutan", "hasil_link", "hasil_catatan", "label_ids", "tanggal_mulai"}
+# catatan_tim = "Instruksi" dari A; catatan R ada di hasil_catatan & komentar.
+
+
+def _needs_review(task: dict) -> bool:
+    """Tugas dari orang lain (R != A) wajib di-review A sebelum Selesai."""
+    return bool(task.get("pemberi_id")) and task.get("pemberi_id") != task.get("penerima_tugas_id")
 
 
 def _raci_roles(task: dict, my_ang: Optional[str]) -> set:
@@ -477,6 +482,7 @@ async def list_tasks(
     search: Optional[str] = None,
     tipe: Optional[str] = None,
     peran: Optional[str] = None,  # R | A | C | I — tugas di mana saya memegang peran itu (lintas divisi)
+    perlu_review: bool = False,  # tugas MENUNGGU_REVIEW di mana saya A (SPV: semua)
     user: dict = Depends(get_current_user),
 ):
     scope = await user_scope(user)
@@ -527,6 +533,13 @@ async def list_tasks(
         if not scope["anggota_id"]:
             return []
         q[field] = scope["anggota_id"]
+    if perlu_review:
+        q["status"] = "MENUNGGU_REVIEW"
+        q.pop("divisi_id", None)
+        if not scope["is_spv"]:
+            if not scope["anggota_id"]:
+                return []
+            q["pemberi_id"] = scope["anggota_id"]
     rows = await db.tasks.find(q, {"_id": 0}).sort([("urutan", 1), ("created_at", -1)]).to_list(3000)
     return rows
 
@@ -588,7 +601,7 @@ def _status_bucket(status: Optional[str]) -> str:
         return "done"
     if status == "BELUM_MULAI":
         return "first"
-    return "mid"  # DALAM_PROSES, REVISI, TERKENDALA
+    return "mid"  # DALAM_PROSES, MENUNGGU_REVIEW, REVISI, TERKENDALA
 
 
 async def _divisi_lists(divisi_id: Optional[str]) -> List[dict]:
@@ -639,7 +652,7 @@ async def _sync_status_list(task: dict, update: dict) -> None:
         elif b == "mid":
             new_status = update.get("status") or task.get("status")
             # REVISI / TERKENDALA tetap dipertahankan di kolom tengah
-            update["status"] = new_status if new_status in ("DALAM_PROSES", "REVISI", "TERKENDALA") else "DALAM_PROSES"
+            update["status"] = new_status if new_status in ("DALAM_PROSES", "MENUNGGU_REVIEW", "REVISI", "TERKENDALA") else "DALAM_PROSES"
         return
     # hanya status yang berubah
     want = _status_bucket(update["status"])
@@ -681,6 +694,15 @@ async def update_task(task_id: str, payload: TaskUpdate, user: dict = Depends(ge
     if update.get("hasil_link") is not None and update.get("hasil_link") != (task.get("hasil_link") or ""):
         await _log_activity(task_id, user, "hasil", "Link hasil diperbarui")
     await _sync_status_list(task, update)
+    submitted_review = False
+    if not scope["is_spv"] and update.get("status") == "SELESAI" and task.get("status") != "SELESAI" \
+            and _needs_review({**task, **update}) and "A" not in _raci_roles(task, scope["anggota_id"]):
+        # R menandai selesai / menyeret ke kolom Selesai -> otomatis dikirim untuk review A
+        update["status"] = "MENUNGGU_REVIEW"
+        mid = _list_for_bucket("mid", await _divisi_lists(task.get("divisi_id")))
+        if mid:
+            update["list_id"] = mid
+        submitted_review = True
     update["updated_at"] = now_iso()
     result = await db.tasks.find_one_and_update(
         {"id": task_id},
@@ -690,9 +712,50 @@ async def update_task(task_id: str, payload: TaskUpdate, user: dict = Depends(ge
     )
     if not result:
         raise HTTPException(404, "Task not found")
-    if "status" in update and update["status"] != task.get("status"):
+    if submitted_review:
+        await _log_activity(task_id, user, "review", "Dikirim untuk review A")
+    elif "status" in update and update["status"] != task.get("status"):
         await _log_activity(task_id, user, "status", f"Status diubah menjadi {update['status']}")
     await _log_raci_changes(task_id, user, task, update)
+    return result
+
+
+async def _set_status(task: dict, status: str, extra: Optional[dict] = None) -> dict:
+    lists = await _divisi_lists(task.get("divisi_id"))
+    upd = {"status": status, "updated_at": now_iso(), **(extra or {})}
+    target = _list_for_bucket(_status_bucket(status), lists)
+    if target:
+        upd["list_id"] = target
+    return await db.tasks.find_one_and_update({"id": task["id"]}, {"$set": upd}, return_document=True, projection={"_id": 0})
+
+
+@api_router.post("/tasks/{task_id}/submit_review", response_model=Task)
+async def submit_review(task_id: str, user: dict = Depends(get_current_user)):
+    """R mengirim hasil ke A untuk disetujui."""
+    task = await _assert_task_access(task_id, user)
+    scope = await user_scope(user)
+    if not scope["is_spv"] and "R" not in _raci_roles(task, scope["anggota_id"]):
+        raise HTTPException(403, "Hanya R (yang mengerjakan) yang dapat mengirim untuk review.")
+    if task.get("status") == "SELESAI":
+        raise HTTPException(400, "Tugas sudah selesai.")
+    if not (task.get("hasil_link") or task.get("hasil_catatan")):
+        raise HTTPException(400, "Isi Link Hasil atau Catatan Hasil dulu sebelum mengirim untuk review.")
+    result = await _set_status(task, "MENUNGGU_REVIEW", {"review_at": now_iso()})
+    await _log_activity(task_id, user, "review", "Dikirim untuk review A")
+    return result
+
+
+@api_router.post("/tasks/{task_id}/approve", response_model=Task)
+async def approve_task(task_id: str, user: dict = Depends(get_current_user)):
+    """A (atau SPV) menyetujui hasil -> SELESAI."""
+    task = await _assert_task_access(task_id, user)
+    scope = await user_scope(user)
+    if not scope["is_spv"] and "A" not in _raci_roles(task, scope["anggota_id"]):
+        raise HTTPException(403, "Hanya A (penyetuju) atau SPV yang dapat menyetujui hasil.")
+    if task.get("status") == "SELESAI":
+        raise HTTPException(400, "Tugas sudah selesai.")
+    result = await _set_status(task, "SELESAI", {"approved_at": now_iso()})
+    await _log_activity(task_id, user, "approve", "Hasil disetujui — tugas Selesai")
     return result
 
 
@@ -707,8 +770,8 @@ async def revisi_task(task_id: str, payload: RevisiPayload, user: dict = Depends
     scope = await user_scope(user)
     if not scope["is_spv"]:
         my_ang = scope["anggota_id"]
-        if not my_ang or task.get("pemberi_id") != my_ang or task.get("penerima_tugas_id") == my_ang:
-            raise HTTPException(403, "Hanya pemberi tugas yang dapat meminta revisi.")
+        if not my_ang or task.get("pemberi_id") != my_ang:
+            raise HTTPException(403, "Hanya A (penyetuju) yang dapat meminta revisi.")
     mid_list = _list_for_bucket("mid", await _divisi_lists(task.get("divisi_id")))
     result = await db.tasks.find_one_and_update(
         {"id": task_id},
@@ -1034,18 +1097,20 @@ async def notifications_feed(user: dict = Depends(get_current_user)):
         seen2 = await db.user_task_seen.find_one({"user_id": scope["user_id"]}, {"_id": 0}) or {}
         since = seen2.get("last_seen_at") or (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
         my_tasks = await db.tasks.find(
-            {"archived": {"$ne": True}, "$or": [{"pemberi_id": me}, {"consulted_ids": me}, {"informed_ids": me}]},
+            {"archived": {"$ne": True}, "$or": [{"pemberi_id": me}, {"penerima_tugas_id": me}, {"consulted_ids": me}, {"informed_ids": me}]},
             {"_id": 0, "id": 1, "nama": 1, "pemberi_id": 1, "penerima_tugas_id": 1, "consulted_ids": 1, "informed_ids": 1}).to_list(500)
         tmap = {t["id"]: t for t in my_tasks}
         if tmap:
             acts = await db.task_activity.find(
                 {"task_id": {"$in": list(tmap)}, "created_at": {"$gt": since}, "user_id": {"$ne": scope["user_id"]},
-                 "kind": {"$in": ["status", "revisi", "hasil", "raci", "comment", "move"]}},
+                 "kind": {"$in": ["status", "revisi", "hasil", "raci", "comment", "move", "review", "approve"]}},
                 {"_id": 0}).sort("created_at", -1).to_list(30)
             for a in acts:
                 t = tmap[a["task_id"]]
-                roles = _raci_roles(t, me) - {"R"}
-                if a["kind"] == "comment" and not roles & {"A", "C"}:
+                roles = _raci_roles(t, me)
+                if roles == {"R"} and a["kind"] not in ("approve", "revisi", "comment"):
+                    continue  # R cukup diberi kabar saat disetujui / diminta revisi / dikomentari
+                if a["kind"] == "comment" and not roles & {"A", "C", "R"}:
                     continue  # Informed tidak perlu notifikasi komentar
                 aktivitas.append({"id": a["id"], "task_id": t["id"], "nama": t["nama"], "kind": a["kind"], "text": a.get("text", ""),
                                   "actor_name": a.get("actor_name"), "peran": "".join(sorted(roles)), "created_at": a["created_at"]})
@@ -1056,10 +1121,15 @@ async def notifications_feed(user: dict = Depends(get_current_user)):
         approvals = await db.users.count_documents({"status": "pending"})
 
     urgent = sum(1 for r in reminders if r["urgensi"] in ("overdue", "today"))
+    perlu_review = 0
+    if scope["is_spv"]:
+        perlu_review = await db.tasks.count_documents({"status": "MENUNGGU_REVIEW", "archived": {"$ne": True}})
+    elif scope["anggota_id"]:
+        perlu_review = await db.tasks.count_documents({"status": "MENUNGGU_REVIEW", "archived": {"$ne": True}, "pemberi_id": scope["anggota_id"]})
     count = len(delegated) + urgent + approvals + len(aktivitas)
     role = "spv" if scope["is_spv"] else ("head" if scope["head_divisi_id"] else "anggota")
     return {"count": count, "delegated": delegated, "reminders": reminders, "approvals": approvals, "role": role,
-            "aktivitas": aktivitas}
+            "aktivitas": aktivitas, "perlu_review": perlu_review}
 
 
 # ============ TASK ACTIVITY & COMMENTS ============
@@ -1418,8 +1488,8 @@ async def list_todo_entries(
             q["period"]["$lte"] = end
     if task_ids:
         q["task_id"] = {"$in": task_ids.split(",")}
-    if not scope["is_spv"]:
-        q["user_id"] = scope["user_id"]
+    # Checklist rutin bersifat pribadi (seperti amaliyah) — termasuk untuk SPV.
+    q["user_id"] = scope["user_id"]
     rows = await db.todo_entries.find(q, {"_id": 0}).to_list(20000)
     return rows
 
@@ -1427,9 +1497,7 @@ async def list_todo_entries(
 @api_router.post("/todo/entries", response_model=TodoEntry)
 async def upsert_todo_entry(payload: TodoEntryCreate, user: dict = Depends(get_current_user)):
     scope = await user_scope(user)
-    filter_q = {"task_id": payload.task_id, "period": payload.period}
-    if not scope["is_spv"]:
-        filter_q["user_id"] = scope["user_id"]
+    filter_q = {"task_id": payload.task_id, "period": payload.period, "user_id": scope["user_id"]}
     existing = await db.todo_entries.find_one(filter_q, {"_id": 0})
     if existing:
         await db.todo_entries.update_one(
@@ -1650,7 +1718,7 @@ async def _raport_summary_impl(start: Optional[str], end: Optional[str], user: d
 
     total = len(all_tasks)
     selesai = sum(1 for t in all_tasks if t.get("status") == "SELESAI")
-    dalam_proses = sum(1 for t in all_tasks if t.get("status") in ("DALAM_PROSES", "REVISI"))
+    dalam_proses = sum(1 for t in all_tasks if t.get("status") in ("DALAM_PROSES", "REVISI", "MENUNGGU_REVIEW"))
     terkendala = sum(1 for t in all_tasks if t.get("status") == "TERKENDALA")
     belum_mulai = sum(1 for t in all_tasks if t.get("status") == "BELUM_MULAI")
     overdue = sum(1 for t in all_tasks if t.get("deadline") and t["deadline"] < today and t.get("status") != "SELESAI")

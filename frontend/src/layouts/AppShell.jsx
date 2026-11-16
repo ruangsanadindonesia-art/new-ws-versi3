@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import NotificationBell from "@/components/NotificationBell";
-import { LayoutDashboard, ListTodo, HeartHandshake, Award, Menu, X, Repeat, Activity, Users, LogOut, ShieldCheck, Target } from "lucide-react";
+import { ListTodo, HeartHandshake, BarChart3, Settings, Menu, X, LogOut, ShieldCheck, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 import { unreadTasks } from "@/lib/api";
@@ -9,24 +9,21 @@ import { useAuth } from "@/lib/AuthContext";
 import GlobalSearch from "@/components/GlobalSearch";
 import SanadLogo from "@/components/SanadLogo";
 
-const BASE_NAV = [
-  { to: "/", label: "Beranda", icon: LayoutDashboard, testId: "nav-dashboard", end: true },
+// 4 menu utama. Halaman lama (/raport, /monitoring, /strategy, /users, /spiritual, /tugas-rutin, /profile)
+// tetap bisa dibuka lewat tautan/bookmark, tapi tidak tampil di menu.
+const NAV = [
   { to: "/tasks", label: "Tugas", icon: ListTodo, testId: "nav-tasks", badgeKey: "tasks" },
-  { to: "/tugas-rutin", label: "Tugas Rutin Tracker", icon: Repeat, testId: "nav-tugas-rutin" },
-  { to: "/spiritual", label: "Spiritual Tracker", icon: HeartHandshake, testId: "nav-spiritual" },
+  { to: "/harian", label: "Harian Saya", icon: HeartHandshake, testId: "nav-harian" },
+  { to: "/laporan", label: "Laporan", icon: BarChart3, testId: "nav-laporan" },
+  { to: "/pengaturan", label: "Pengaturan", icon: Settings, testId: "nav-pengaturan" },
+];
+const HIDDEN_TITLES = [
+  ["/beranda", "Beranda"], ["/raport", "Raport"], ["/monitoring", "Monitoring"], ["/strategy", "Strategi & Eksekusi"],
+  ["/users", "Manajemen User"], ["/spiritual", "Spiritual Tracker"], ["/tugas-rutin", "Tugas Rutin Tracker"], ["/profile", "Profil"],
 ];
 
-const SPV_NAV = [
-  { to: "/raport", label: "Raport", icon: Award, testId: "nav-raport", spvOnly: true },
-  { to: "/monitoring", label: "Monitoring SPV", icon: Activity, testId: "nav-monitoring", spvOnly: true },
-  { to: "/strategy", label: "Strategi & Eksekusi", icon: Target, testId: "nav-strategy", spvOnly: true },
-  { to: "/users", label: "Manajemen User", icon: Users, testId: "nav-users", spvOnly: true },
-];
-
-function navFor(user) {
-  if (user?.role === "spv") return [...BASE_NAV, ...SPV_NAV];
-  if (user?.can_monitor) return [...BASE_NAV, { to: "/monitoring", label: "Monitoring Tim", icon: Activity, testId: "nav-monitoring" }];
-  return BASE_NAV;
+function navFor() {
+  return NAV;
 }
 
 function SidebarBody({ onNavigate, unreadTotal, user, onLogout }) {
@@ -93,7 +90,7 @@ function SidebarBody({ onNavigate, unreadTotal, user, onLogout }) {
                 </p>
               </div>
             </div>
-            <NavLink to="/profile" onClick={onNavigate} data-testid="nav-profile" className="mt-2 flex w-full items-center justify-center gap-1 rounded-md border border-emerald-200 px-2 py-1.5 text-xs font-medium text-emerald-900 hover:bg-emerald-50">
+            <NavLink to="/pengaturan" onClick={onNavigate} data-testid="nav-profile" className="mt-2 flex w-full items-center justify-center gap-1 rounded-md border border-emerald-200 px-2 py-1.5 text-xs font-medium text-emerald-900 hover:bg-emerald-50">
               <Users size={12} /> Profil Saya
             </NavLink>
             <button onClick={onLogout} data-testid="logout-btn" className="mt-2 flex w-full items-center justify-center gap-1 rounded-md border border-emerald-200 px-2 py-1.5 text-xs font-medium text-emerald-900 hover:bg-emerald-50">
@@ -112,7 +109,8 @@ export default function AppShell() {
   const location = useLocation();
   const { user, logout } = useAuth();
   const fullNav = navFor(user);
-  const current = fullNav.find((n) => (n.end ? location.pathname === n.to : location.pathname.startsWith(n.to))) || fullNav[0];
+  const hidden = HIDDEN_TITLES.find(([p]) => location.pathname.startsWith(p));
+  const current = fullNav.find((n) => location.pathname.startsWith(n.to)) || (hidden ? { label: hidden[1] } : fullNav[0]);
 
   const refreshUnread = () => unreadTasks().then(setUnread).catch(() => {});
 

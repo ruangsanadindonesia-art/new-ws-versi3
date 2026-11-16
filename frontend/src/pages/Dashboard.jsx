@@ -79,6 +79,9 @@ function DeadlineDigest() {
   useEffect(() => { dashboardDigest().then(setD).catch(() => setD({ counts: {}, overdue: [], today: [], upcoming: [], stagnant: [] })); }, []);
   if (!d) return null;
   const empty = (d.counts.overdue + d.counts.today + d.counts.upcoming + d.counts.stagnant) === 0;
+  // Tugas overdue sudah tampil di "Butuh Aksi Sekarang" — jangan diulang di daftar stagnan.
+  const shownIds = new Set([...d.overdue, ...d.today, ...d.upcoming].map((t) => t.id));
+  const stagnantOnly = d.stagnant.filter((t) => !shownIds.has(t.id));
 
   return (
     <section className="rounded-2xl border border-emerald-100 bg-white p-5 md:p-6" data-testid="spv-deadline-digest">
@@ -120,8 +123,8 @@ function DeadlineDigest() {
             <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-800">Perhatian Berikutnya</p>
             <div className="space-y-1.5">
               {d.upcoming.slice(0, 3).map((t) => <DigestRow key={t.id} t={t} tone="slate" />)}
-              {d.stagnant.slice(0, 3).map((t) => <DigestRow key={t.id} t={t} tone="slate" />)}
-              {d.upcoming.length + d.stagnant.length === 0 && <p className="text-xs text-emerald-800/50 italic">Tidak ada.</p>}
+              {stagnantOnly.slice(0, 3).map((t) => <DigestRow key={t.id} t={t} tone="slate" />)}
+              {d.upcoming.length + stagnantOnly.length === 0 && <p className="text-xs text-emerald-800/50 italic">Tidak ada.</p>}
             </div>
           </div>
         </div>

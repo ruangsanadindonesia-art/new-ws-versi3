@@ -19,12 +19,13 @@ import {
 import { ColorPicker, KATEGORI_LABEL, TIPES } from "./shared";
 import { RACI, RoleTag, raciRoles, PersonSelect, PeopleSelect, RaciLegend } from "./raci";
 
-const STATUS_LABELS = { BELUM_MULAI: "Belum Mulai", DALAM_PROSES: "Dalam Proses", SELESAI: "Selesai", TERKENDALA: "Terkendala", REVISI: "Revisi" };
+const STATUS_LABELS = { BELUM_MULAI: "Belum Mulai", DALAM_PROSES: "Dalam Proses", MENUNGGU_REVIEW: "Menunggu review", REVISI: "Revisi", TERKENDALA: "Terkendala", SELESAI: "Selesai" };
 
 // ============ TASK DIALOG ============
-export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editing, lists, labels, anggotaAll, divisiList, currentDivisiId, onNeedMoveConfirm, isSpv = true, myAnggotaId = null, editingTask = null, onRevisi = null }) {
+export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editing, lists, labels, anggotaAll, divisiList, isSpv = true, myAnggotaId = null, editingTask = null, onRevisi = null, onKirimReview = null, onSetujui = null }) {
   const set = (k) => (e) => setForm({ ...form, [k]: e?.target ? e.target.value : e });
   const [revisiNote, setRevisiNote] = useState("");
+  const [showDetail, setShowDetail] = useState(false);
   const toggleLabel = (id) => {
     const has = (form.label_ids || []).includes(id);
     setForm({ ...form, label_ids: has ? form.label_ids.filter((x) => x !== id) : [...(form.label_ids || []), id] });
@@ -33,16 +34,25 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
 
   // Hak per peran RACI. A (atau SPV) mengatur definisi tugas & RACI; R mengerjakan (status, kolom, hasil).
   const myRoles = editing ? raciRoles(editingTask, myAnggotaId) : ["R", "A"];
-  const canDef = !editing || isSpv || myRoles.includes("A");
-  const canWork = !editing || isSpv || myRoles.includes("R");
+  const isA = myRoles.includes("A"), isR = myRoles.includes("R");
+  const canDef = !editing || isSpv || isA;
+  const canWork = !editing || isSpv || isR;
   const isMonitorOnly = editing && !canDef && !canWork; // Consulted / Informed
   const canFillHasil = editing && canWork;
   const pemberiAnggota = editingTask?.pemberi_id ? anggotaAll.find((a) => a.id === editingTask.pemberi_id) : null;
-  const canRevisi = editing && onRevisi && (isSpv || (myRoles.includes("A") && !myRoles.includes("R")));
+  const status = editingTask?.status;
+  const needsReview = !!(editingTask?.pemberi_id && editingTask.pemberi_id !== editingTask.penerima_tugas_id);
+  const canApprove = editing && (isSpv || isA) && status === "MENUNGGU_REVIEW";
+  const canRevisi = editing && onRevisi && (isSpv || isA) && status !== "SELESAI";
+  const canSubmitReview = editing && (isSpv || isR) && needsReview && !["MENUNGGU_REVIEW", "SELESAI"].includes(status) && !isA;
   const raciExclude = [form.penerima_tugas_id, form.pemberi_id].filter(Boolean);
+  // R pada tugas yang wajib review tidak memilih "Selesai" sendiri — pakai tombol Kirim untuk review.
+  const statusOptions = Object.entries(STATUS_LABELS).filter(([v]) =>
+    v === form.status || isSpv || (v !== "MENUNGGU_REVIEW" && !(v === "SELESAI" && needsReview && !isA)));
+  const detailCount = [form.tanggal_mulai, (form.label_ids || []).length, form.catatan_spv, isRutin].filter(Boolean).length;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(v) => { if (!v) setShowDetail(false); onOpenChange(v); }}>
       <DialogContent className="max-h-[90vh] overflow-y-auto" data-testid="task-dialog">
         <DialogHeader>
           <DialogTitle className="font-display text-xl">
@@ -53,96 +63,33 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
               </span>
             )}
           </DialogTitle>
-          <DialogDescription className="sr-only">Formulir membuat atau mengubah tugas, termasuk penerima, brief, dan hasil.</DialogDescription>
+          <DialogDescription className="sr-only">Formulir membuat atau mengubah tugas, termasuk peran RACI, brief, dan hasil.</DialogDescription>
         </DialogHeader>
         {isMonitorOnly && (
           <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
             Anda <b>{myRoles.includes("C") ? "Consulted (C)" : "Informed (I)"}</b> di tugas ini: bisa melihat perkembangan{myRoles.includes("C") ? " dan memberi masukan lewat komentar" : ""}. Perubahan dilakukan oleh R (mengerjakan) atau A (penanggung jawab).
           </div>
         )}
+        {editing && status === "MENUNGGU_REVIEW" && (
+          <div className="rounded-md border border-violet-300 bg-violet-50 p-2.5 text-xs text-violet-900" data-testid="review-banner">
+            {canApprove ? <>Hasil sudah dikirim R. Periksa hasil di bawah, lalu <b>Setujui</b> atau <b>Minta revisi</b>.</>
+              : <>Menunggu review dari <b>{pemberiAnggota?.nama || "A"}</b>.</>}
+          </div>
+        )}
         <fieldset disabled={isMonitorOnly} className={isMonitorOnly ? "opacity-90" : ""}>
         <div className="space-y-3">
-          {editing && !isMonitorOnly && editingTask?.status === "REVISI" && editingTask?.revisi_catatan && (
+          {editing && !isMonitorOnly && status === "REVISI" && editingTask?.revisi_catatan && (
             <div data-testid="revisi-banner" className="rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-900">
               <p className="font-semibold">Revisi{pemberiAnggota ? ` dari ${pemberiAnggota.nama}` : ""}{editingTask.revisi_count > 1 ? ` (ke-${editingTask.revisi_count})` : ""}:</p>
               <p className="mt-1">{editingTask.revisi_catatan}</p>
-              <p className="mt-1 text-[10px] text-red-700/70">Perbaiki hasil tugas, lalu ubah status kembali (misal Dalam Proses / Selesai).</p>
+              <p className="mt-1 text-[10px] text-red-700/70">Perbaiki hasil, lalu kirim lagi untuk review.</p>
             </div>
           )}
           <div>
             <label className="text-xs font-medium text-emerald-900">Nama Tugas *</label>
             <Input data-testid="input-nama" value={form.nama} onChange={set("nama")} placeholder="contoh: Rekap konten pekan ini" disabled={!canDef} />
           </div>
-          <div>
-            <label className="text-xs font-medium text-emerald-900">Tipe Tugas</label>
-            <Select value={form.kategori} onValueChange={set("kategori")} disabled={!canDef}>
-              <SelectTrigger data-testid="select-tipe"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {TIPES.map((k) => <SelectItem key={k} value={k}>{KATEGORI_LABEL[k]}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            {isRutin && (
-              <p className="mt-1 text-[10px] text-emerald-700/70">
-                Tugas rutin akan muncul di <b>Tugas Rutin Tracker</b>.
-              </p>
-            )}
-          </div>
-          {editing && (
-            <div>
-              <label className="text-xs font-medium text-emerald-900">Status Tugas</label>
-              <Select value={form.status} onValueChange={set("status")} disabled={!canWork}>
-                <SelectTrigger data-testid="select-status"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {Object.entries(STATUS_LABELS).map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-          {!isRutin && (
-            <div>
-              <label className="text-xs font-medium text-emerald-900">List</label>
-              <Select value={form.list_id || "none"} onValueChange={(v) => setForm({ ...form, list_id: v === "none" ? null : v })} disabled={!canWork}>
-                <SelectTrigger data-testid="select-list"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Tanpa List</SelectItem>
-                  {lists.map((l) => <SelectItem key={l.id} value={l.id}>{l.nama}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-          {!isRutin && (
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-medium text-emerald-900">Tanggal Mulai</label>
-                <Input type="date" value={form.tanggal_mulai || ""} onChange={set("tanggal_mulai")} data-testid="input-mulai" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-emerald-900">Deadline</label>
-                <Input type="date" value={form.deadline || ""} onChange={set("deadline")} data-testid="input-deadline" disabled={!canDef} />
-              </div>
-            </div>
-          )}
-          <div>
-            <label className="text-xs font-medium text-emerald-900">Label</label>
-            <div className="flex flex-wrap gap-1.5 rounded-md border border-emerald-100 p-2">
-              {labels.length === 0 && <span className="text-xs text-emerald-700/60">Belum ada label. Buka "Kelola Label".</span>}
-              {labels.map((l) => {
-                const active = (form.label_ids || []).includes(l.id);
-                return (
-                  <button
-                    key={l.id}
-                    type="button"
-                    onClick={() => toggleLabel(l.id)}
-                    data-testid={`label-toggle-${l.id}`}
-                    className={`rounded-full px-2.5 py-0.5 text-xs font-semibold text-white transition ${active ? "ring-2 ring-offset-1 ring-emerald-900" : "opacity-60 hover:opacity-100"}`}
-                    style={{ background: l.warna }}
-                  >
-                    {l.nama}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+
           <div className="rounded-lg border border-emerald-200 p-3" data-testid="raci-section">
             <div className="mb-2 flex items-center justify-between gap-2">
               <p className="text-xs font-semibold uppercase tracking-wider text-emerald-800">Peran (RACI)</p>
@@ -170,15 +117,35 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
                   anggotaAll={anggotaAll} divisiList={divisiList} exclude={[...raciExclude, ...(form.consulted_ids || [])]} disabled={!canDef} testId="select-raci-i" />
               </div>
             </div>
-            {!editing && <p className="mt-2 text-[10px] text-emerald-700/70">R dan A otomatis Anda sendiri. Ganti R untuk langsung menugaskan orang lain; tugas tetap tercatat di tim Anda.</p>}
+            {!editing && <p className="mt-2 text-[10px] text-emerald-700/70">R dan A otomatis Anda sendiri. Ganti R untuk langsung menugaskan orang lain. Jika R berbeda dari A, hasil harus disetujui A sebelum Selesai.</p>}
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {!isRutin && (
+              <div>
+                <label className="text-xs font-medium text-emerald-900">Deadline</label>
+                <Input type="date" value={form.deadline || ""} onChange={set("deadline")} data-testid="input-deadline" disabled={!canDef} />
+              </div>
+            )}
+            {editing && (
+              <div>
+                <label className="text-xs font-medium text-emerald-900">Status</label>
+                <Select value={form.status} onValueChange={set("status")} disabled={!canWork}>
+                  <SelectTrigger data-testid="select-status"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {statusOptions.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </div>
           <div>
-            <label className="text-xs font-medium text-emerald-900">Catatan Tim</label>
-            <Textarea rows={2} value={form.catatan_tim || ""} onChange={set("catatan_tim")} />
+            <label className="text-xs font-medium text-emerald-900">Instruksi <span className="text-emerald-700/50">(dari A)</span></label>
+            <Textarea rows={2} value={form.catatan_tim || ""} onChange={set("catatan_tim")} placeholder="Apa yang perlu dikerjakan, standar hasil, catatan penting…" disabled={!canDef} data-testid="input-instruksi" />
           </div>
           <div>
             <label className="text-xs font-medium text-emerald-900">Brief / Link Referensi <span className="text-emerald-700/50">(opsional)</span></label>
-            <Input value={form.brief_link || ""} onChange={set("brief_link")} placeholder="https://docs.google.com/... (link brief eksternal)" data-testid="input-brief-link" disabled={!canDef} />
+            <Input value={form.brief_link || ""} onChange={set("brief_link")} placeholder="https://docs.google.com/..." data-testid="input-brief-link" disabled={!canDef} />
           </div>
           {editing && (
             <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-3">
@@ -192,22 +159,68 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
                 </div>
                 <div>
                   <label className="text-xs font-medium text-emerald-900">Catatan Hasil</label>
-                  <Textarea rows={2} value={form.hasil_catatan || ""} onChange={set("hasil_catatan")} placeholder="Catatan singkat hasil pengerjaan..." disabled={!canFillHasil} data-testid="input-hasil-catatan" />
+                  <Textarea rows={2} value={form.hasil_catatan || ""} onChange={set("hasil_catatan")} placeholder="Ringkasan hasil, kendala, hal yang perlu diperhatikan A…" disabled={!canFillHasil} data-testid="input-hasil-catatan" />
                 </div>
               </div>
             </div>
           )}
-          {editing && isSpv && (
-            <>
+
+          <button type="button" onClick={() => setShowDetail((v) => !v)} data-testid="toggle-detail"
+            className="flex w-full items-center justify-between rounded-md border border-dashed border-emerald-200 px-3 py-2 text-xs font-medium text-emerald-800 hover:bg-emerald-50">
+            <span>Detail lainnya{detailCount ? ` (${detailCount} terisi)` : ""} — tipe, kolom, tanggal mulai, label{isSpv && editing ? ", catatan SPV" : ""}</span>
+            <span>{showDetail ? "Tutup" : "Buka"}</span>
+          </button>
+          {showDetail && (
+            <div className="space-y-3 rounded-lg bg-emerald-50/40 p-3" data-testid="detail-section">
               <div>
-                <label className="text-xs font-medium text-emerald-900">Catatan SPV <span className="text-emerald-700/50">(saat edit)</span></label>
-                <Textarea rows={2} value={form.catatan_spv || ""} onChange={set("catatan_spv")} data-testid="input-catatan-spv" />
+                <label className="text-xs font-medium text-emerald-900">Tipe Tugas</label>
+                <Select value={form.kategori} onValueChange={set("kategori")} disabled={!canDef}>
+                  <SelectTrigger data-testid="select-tipe"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {TIPES.map((k) => <SelectItem key={k} value={k}>{KATEGORI_LABEL[k]}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                {isRutin && <p className="mt-1 text-[10px] text-emerald-700/70">Tugas rutin muncul di <b>Harian Saya › Tugas rutin</b>.</p>}
               </div>
+              {!isRutin && (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="text-xs font-medium text-emerald-900">Kolom Kanban</label>
+                    <Select value={form.list_id || "none"} onValueChange={(v) => setForm({ ...form, list_id: v === "none" ? null : v })} disabled={!canWork}>
+                      <SelectTrigger data-testid="select-list"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Tanpa kolom</SelectItem>
+                        {lists.map((l) => <SelectItem key={l.id} value={l.id}>{l.nama}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-emerald-900">Tanggal Mulai</label>
+                    <Input type="date" value={form.tanggal_mulai || ""} onChange={set("tanggal_mulai")} data-testid="input-mulai" disabled={!canWork && !canDef} />
+                  </div>
+                </div>
+              )}
               <div>
-                <label className="text-xs font-medium text-emerald-900">Link Output / Dokumen (legacy)</label>
-                <Input value={form.link_output || ""} onChange={set("link_output")} placeholder="https://..." data-testid="input-link" />
+                <label className="text-xs font-medium text-emerald-900">Label</label>
+                <div className="flex flex-wrap gap-1.5 rounded-md border border-emerald-100 bg-white p-2">
+                  {labels.length === 0 && <span className="text-xs text-emerald-700/60">Belum ada label.</span>}
+                  {labels.map((l) => {
+                    const active = (form.label_ids || []).includes(l.id);
+                    return (
+                      <button key={l.id} type="button" onClick={() => toggleLabel(l.id)} data-testid={`label-toggle-${l.id}`}
+                        className={`rounded-full px-2.5 py-0.5 text-xs font-semibold text-white transition ${active ? "ring-2 ring-offset-1 ring-emerald-900" : "opacity-60 hover:opacity-100"}`}
+                        style={{ background: l.warna }}>{l.nama}</button>
+                    );
+                  })}
+                </div>
               </div>
-            </>
+              {editing && isSpv && (
+                <div>
+                  <label className="text-xs font-medium text-emerald-900">Catatan SPV</label>
+                  <Textarea rows={2} value={form.catatan_spv || ""} onChange={set("catatan_spv")} data-testid="input-catatan-spv" />
+                </div>
+              )}
+            </div>
           )}
         </div>
         </fieldset>
@@ -215,25 +228,32 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
 
         {canRevisi && (
           <div className="mt-3 rounded-lg border border-red-200 bg-red-50/60 p-3" data-testid="revisi-box">
-            <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-red-800">Review Hasil &amp; Minta Revisi</p>
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-red-800">Minta Revisi</p>
             {editingTask?.revisi_catatan && (
               <p className="mb-2 text-[10px] text-red-700/70">
                 Revisi terakhir{editingTask.revisi_count ? ` (total ${editingTask.revisi_count}x)` : ""}: {editingTask.revisi_catatan}
               </p>
             )}
             <Textarea rows={2} value={revisiNote} onChange={(e) => setRevisiNote(e.target.value)}
-              placeholder="Tulis apa yang perlu direvisi penerima..." data-testid="input-revisi-catatan" />
+              placeholder="Tulis apa yang perlu diperbaiki R…" data-testid="input-revisi-catatan" />
             <Button onClick={() => { onRevisi(editingTask.id, revisiNote); setRevisiNote(""); }} disabled={!revisiNote.trim()}
               data-testid="submit-revisi" className="mt-2 bg-red-600 text-white hover:bg-red-700">
-              Kirim Revisi (ubah status jadi REVISI)
+              Kirim permintaan revisi
             </Button>
           </div>
         )}
-        <DialogFooter>
+        <DialogFooter className="gap-2 sm:gap-2">
           <Button variant="outline" onClick={() => onOpenChange(false)}>{isMonitorOnly ? "Tutup" : "Batal"}</Button>
+          {canSubmitReview && onKirimReview && (
+            <Button variant="outline" onClick={async () => { try { await onSubmit({ keepOpen: true }); } catch { return; } onKirimReview(editingTask.id); }} data-testid="submit-review"
+              className="border-violet-300 text-violet-800 hover:bg-violet-50">Simpan &amp; kirim untuk review</Button>
+          )}
+          {canApprove && onSetujui && (
+            <Button onClick={() => onSetujui(editingTask.id)} data-testid="approve-task" className="bg-emerald-700 text-white hover:bg-emerald-800">Setujui hasil</Button>
+          )}
           {!isMonitorOnly && (
-            <Button onClick={onSubmit} data-testid="submit-task" className="bg-emerald-900 hover:bg-emerald-800">
-              {editing ? "Simpan Perubahan" : "Tambah Tugas"}
+            <Button onClick={() => onSubmit().catch(() => {})} data-testid="submit-task" className="bg-emerald-900 hover:bg-emerald-800">
+              {editing ? "Simpan" : "Tambah Tugas"}
             </Button>
           )}
         </DialogFooter>
@@ -247,6 +267,8 @@ const KIND_META = {
   status: { label: "mengubah status", cls: "text-sky-700" },
   revisi: { label: "meminta revisi", cls: "text-red-700" },
   move: { label: "memindahkan tugas", cls: "text-amber-700" },
+  review: { label: "mengirim untuk review", cls: "text-violet-700" },
+  approve: { label: "menyetujui hasil", cls: "text-emerald-700" },
   comment: { label: "berkomentar", cls: "text-emerald-900" },
   raci: { label: "mengatur peran RACI", cls: "text-sky-700" },
   hasil: { label: "memperbarui hasil", cls: "text-emerald-700" },
