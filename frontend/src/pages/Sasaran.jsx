@@ -13,10 +13,17 @@ import {
   sasaranOverview, sasaranPeriods, sasaranCreatePeriod, sasaranActivatePeriod, sasaranArchivePeriod, sasaranCopyFrom,
   sasaranVisi, sasaranSaveVisi, listAnggota, listDivisi,
 } from "@/lib/api";
-import { StatusPill, ProgressBar, UkuranRow, CheckinDialog, UkuranDialog, SasaranSheet, PERSPEKTIF, STATUS } from "@/pages/sasaran/parts";
+import { StatusPill, ProgressBar, UkuranRow, CheckinDialog, UkuranDialog, SasaranSheet, PERSPEKTIF, PERSPEKTIF_ARTI, STATUS, InfoTip, ISTILAH } from "@/pages/sasaran/parts";
 import EvaluasiSasaran from "@/pages/sasaran/Evaluasi";
 
-const TABS = [{ k: "ringkasan", label: "Ringkasan" }, { k: "sasaran", label: "Sasaran" }, { k: "evaluasi", label: "Evaluasi" }];
+// Satu data (Objective → Key Result → Tugas), beberapa sudut pandang manajemen.
+const TABS = [
+  { k: "ringkasan", label: "Dashboard", hint: "Ringkasan kondisi target periode ini" },
+  { k: "bsc", label: "BSC", hint: ISTILAH.BSC.isi },
+  { k: "sasaran", label: "OKR", hint: ISTILAH.OKR.isi },
+  { k: "kpi", label: "KPI", hint: ISTILAH.KPI.isi },
+  { k: "evaluasi", label: "Evaluasi", hint: "Rekap akhir periode, catatan SPV, PDF Komitmen & Evaluasi" },
+];
 
 export default function Sasaran() {
   const { user } = useAuth();
@@ -53,7 +60,7 @@ export default function Sasaran() {
   const period = ov?.period;
   const isSpv = ov?.is_spv;
 
-  if (!ov) return <p className="p-8 text-center text-sm text-emerald-800/60">Memuat sasaran…</p>;
+  if (!ov) return <p className="p-8 text-center text-sm text-emerald-800/60">Memuat Target Bersama…</p>;
 
   return (
     <div className="space-y-4" data-testid="sasaran-page">
@@ -81,9 +88,9 @@ export default function Sasaran() {
               {period && !period.archived && <MenuBtn onClick={async () => { await sasaranArchivePeriod(period.id); toast.success("Periode diarsipkan"); load(period.id); }} icon={Archive}>Arsipkan periode ini</MenuBtn>}
               {period && periods.filter((p) => p.id !== period.id).length > 0 && (
                 <div className="mt-1 border-t border-emerald-50 pt-1">
-                  <p className="px-2 py-1 text-[10px] uppercase text-emerald-800/50">Salin sasaran dari</p>
+                  <p className="px-2 py-1 text-[10px] uppercase text-emerald-800/50">Salin OKR dari periode</p>
                   {periods.filter((p) => p.id !== period.id).map((p) => (
-                    <MenuBtn key={p.id} icon={Copy} onClick={async () => { try { const r = await sasaranCopyFrom(period.id, p.id); toast.success(`${r.sasaran_disalin} sasaran disalin`); load(period.id); } catch (e) { toast.error(formatApiErr(e)); } }}>{p.nama}</MenuBtn>
+                    <MenuBtn key={p.id} icon={Copy} onClick={async () => { try { const r = await sasaranCopyFrom(period.id, p.id); toast.success(`${r.sasaran_disalin} objective disalin`); load(period.id); } catch (e) { toast.error(formatApiErr(e)); } }}>{p.nama}</MenuBtn>
                   ))}
                 </div>
               )}
@@ -94,6 +101,12 @@ export default function Sasaran() {
       </div>
 
       <PageTabs tabs={TABS} value={tab} onChange={(k) => setParams(k === "ringkasan" ? {} : { tab: k })} />
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-emerald-800/70" data-testid="glosarium">
+        <span>Apa itu:</span>
+        {["BSC", "OKR", "KPI", "KR", "BASELINE", "POLARITAS", "CHECKIN", "STATUS"].map((k) => (
+          <span key={k} className="inline-flex items-center gap-0.5">{({ KR: "Key Result", BASELINE: "Baseline", POLARITAS: "Polaritas", CHECKIN: "Check-in", STATUS: "Status" })[k] || k}<InfoTip k={k} /></span>
+        ))}
+      </div>
 
       {!period ? (
         <div className="rounded-xl border border-dashed border-emerald-200 bg-white p-8 text-center text-sm text-emerald-800/70">
@@ -101,6 +114,10 @@ export default function Sasaran() {
         </div>
       ) : tab === "ringkasan" ? (
         <Ringkasan ov={ov} visi={visi} canCheckin={canCheckin} sById={sById} onCheckin={setCheckinU} onOpen={() => setParams({ tab: "sasaran" })} />
+      ) : tab === "bsc" ? (
+        <BscView ov={ov} onOpen={() => setParams({ tab: "sasaran" })} />
+      ) : tab === "kpi" ? (
+        <KpiView ov={ov} canCheckin={canCheckin} sById={sById} onCheckin={setCheckinU} />
       ) : tab === "sasaran" ? (
         <DaftarSasaran ov={ov} canCheckin={canCheckin} onCheckin={setCheckinU} divisiList={divisiList}
           onNew={() => setSheet({})} onEdit={(s) => setSheet({ sasaran: s })}
@@ -120,11 +137,69 @@ export default function Sasaran() {
   );
 }
 
-// Persen sasaran hanya dari ukuran yang sudah punya capaian — tampilkan berapa yang sudah ada datanya.
+// Persen objective hanya dari KR yang sudah punya realisasi — tampilkan berapa yang sudah ada datanya.
 function dataInfo(s) {
   const n = s.ukuran.length, ada = s.ukuran.filter((u) => u.capaian !== null && u.capaian !== undefined).length;
-  if (!n) return "belum ada ukuran";
-  return ada === n ? `${n} ukuran` : `${ada} dari ${n} ukuran ada data`;
+  if (!n) return "belum ada KR";
+  return ada === n ? `${n} KR` : `${ada} dari ${n} KR ada data`;
+}
+
+function BscView({ ov, onOpen }) {
+  const groups = [...Object.keys(PERSPEKTIF), "_"].map((k) => ({ k, list: ov.sasaran.filter((s) => (s.perspektif || "_") === k) }));
+  return (
+    <div className="space-y-3" data-testid="bsc-view">
+      <p className="text-xs text-emerald-800/70">Objective dikelompokkan per perspektif Balanced Scorecard <InfoTip k="BSC" />. Atur perspektif lewat tombol Ubah di tab OKR.</p>
+      <div className="grid gap-3 md:grid-cols-2">
+        {groups.filter((g) => g.k !== "_" || g.list.length).map((g) => (
+          <section key={g.k} className="rounded-xl border border-emerald-100 bg-white p-4" data-testid={`bsc-${g.k}`}>
+            <h3 className="font-display text-base font-semibold text-emerald-950">{g.k === "_" ? "Tanpa perspektif" : PERSPEKTIF[g.k]}</h3>
+            <p className="mb-3 text-[11px] text-emerald-800/60">{g.k === "_" ? "Objective yang belum diberi perspektif BSC." : PERSPEKTIF_ARTI[g.k]}</p>
+            {g.list.length === 0 ? <p className="text-xs italic text-emerald-800/50">Belum ada objective di perspektif ini.</p> : (
+              <ul className="space-y-2">
+                {g.list.map((s) => (
+                  <li key={s.id}>
+                    <button onClick={onOpen} className="w-full rounded-lg border border-emerald-50 p-2.5 text-left hover:bg-emerald-50/50">
+                      <div className="flex items-start justify-between gap-2"><span className="text-sm text-emerald-950">{s.judul}</span><StatusPill status={s.status} small /></div>
+                      <p className="mt-0.5 text-[11px] text-emerald-800/60">{s.level === "TIM" ? `Tim ${s.divisi?.nama}` : "Lembaga"} · {dataInfo(s)}</p>
+                      <div className="mt-1.5 flex items-center gap-2"><ProgressBar pct={s.pct} status={s.status} /><span className="w-9 text-right text-[11px] tabular-nums">{s.pct == null ? "–" : `${Math.round(Math.min(s.pct, 100))}%`}</span></div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function KpiView({ ov, canCheckin, sById, onCheckin }) {
+  const byPic = {};
+  ov.sasaran.forEach((s) => s.ukuran.forEach((u) => { const k = u.pic?.id || "_"; (byPic[k] = byPic[k] || { nama: u.pic?.nama || "Belum ada PIC", list: [] }).list.push(u); }));
+  const people = Object.entries(byPic).sort(([a, x], [b, y]) => (a === "_") - (b === "_") || x.nama.localeCompare(y.nama));
+  return (
+    <div className="space-y-3" data-testid="kpi-view">
+      <p className="text-xs text-emerald-800/70">KPI per orang <InfoTip k="KPI" /> — setiap Key Result yang punya PIC menjadi KPI orang tersebut. Check-in dilakukan oleh PIC.</p>
+      <div className="grid gap-3 lg:grid-cols-2">
+        {people.map(([id, p]) => {
+          const cnt = (st) => p.list.filter((u) => u.status === st).length;
+          return (
+            <section key={id} className="rounded-xl border border-emerald-100 bg-white p-4" data-testid={`kpi-${id}`}>
+              <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+                <h3 className="font-display text-base font-semibold text-emerald-950">{p.nama}</h3>
+                <span className="text-[11px] text-emerald-800/70">{p.list.length} KPI · {cnt("SESUAI")} on track · {cnt("PERHATIAN") + cnt("TERTINGGAL")} perlu perhatian · {p.list.filter((u) => u.perlu_update).length} perlu check-in</span>
+              </div>
+              <div className="space-y-2">
+                {p.list.map((u) => <UkuranRow key={u.id} u={u} compact canCheckin={canCheckin(sById[u.sasaran_id] || {}, u)} onCheckin={onCheckin} />)}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+      {people.length === 0 && <p className="rounded-xl border border-dashed border-emerald-200 bg-white p-6 text-center text-sm text-emerald-800/70">Belum ada KPI. Tambahkan Key Result dengan PIC di tab OKR.</p>}
+    </div>
+  );
 }
 
 function MenuBtn({ onClick, icon: Icon, children }) {
@@ -142,8 +217,8 @@ function Ringkasan({ ov, visi, canCheckin, sById, onCheckin, onOpen }) {
 
       {ov.ukuran_saya.length > 0 && (
         <section className={`rounded-xl border p-4 ${perlu.length ? "border-amber-200 bg-amber-50/60" : "border-emerald-100 bg-white"}`} data-testid="checkin-saya">
-          <h3 className="mb-1 font-display text-base font-semibold text-emerald-950">Check-in saya</h3>
-          <p className="mb-3 text-xs text-emerald-800/70">{perlu.length ? `${perlu.length} ukuran milik Anda belum di-update dalam 10 hari terakhir.` : "Semua ukuran milik Anda sudah di-update. Terima kasih."}</p>
+          <h3 className="mb-1 font-display text-base font-semibold text-emerald-950">KPI saya — check-in <InfoTip k="CHECKIN" /></h3>
+          <p className="mb-3 text-xs text-emerald-800/70">{perlu.length ? `${perlu.length} KPI Anda belum di-check-in dalam 10 hari terakhir.` : "Semua KPI Anda sudah di-check-in. Terima kasih."}</p>
           <div className="space-y-2">
             {ov.ukuran_saya.map((u) => <UkuranRow key={u.id} u={u} compact canCheckin={canCheckin(sById[u.sasaran_id] || {}, u)} onCheckin={onCheckin} />)}
           </div>
@@ -154,10 +229,10 @@ function Ringkasan({ ov, visi, canCheckin, sById, onCheckin, onOpen }) {
         {[["SESUAI", st.sesuai], ["PERHATIAN", st.perhatian], ["TERTINGGAL", st.tertinggal], ["BELUM_ADA_DATA", st.belum_data]].map(([k, n]) => (
           <span key={k} className={`rounded-full px-3 py-1 font-semibold ${STATUS[k].cls}`}>{n || 0} {STATUS[k].label.toLowerCase()}</span>
         ))}
-        <span className="rounded-full bg-white px-3 py-1 text-emerald-800 ring-1 ring-emerald-100">{st.perlu_update || 0} ukuran perlu di-update</span>
+        <span className="rounded-full bg-white px-3 py-1 text-emerald-800 ring-1 ring-emerald-100">{st.perlu_update || 0} KR perlu check-in</span><InfoTip k="STATUS" />
       </div>
 
-      {[["Sasaran lembaga", lembaga], ["Sasaran tim", tim]].map(([judul, list]) => list.length > 0 && (
+      {[["Objective lembaga", lembaga], ["Objective tim", tim]].map(([judul, list]) => list.length > 0 && (
         <section key={judul} className="rounded-xl border border-emerald-100 bg-white">
           <h3 className="border-b border-emerald-50 px-4 py-3 font-display text-base font-semibold text-emerald-950">{judul}</h3>
           <ul>
@@ -167,7 +242,7 @@ function Ringkasan({ ov, visi, canCheckin, sById, onCheckin, onOpen }) {
                   <span className="min-w-0">
                     <span className="block text-sm font-medium text-emerald-950">{s.judul}</span>
                     <span className="block text-[11px] text-emerald-800/60">
-                      {s.level === "TIM" ? s.divisi?.nama : "Lembaga"}{s.pj ? ` · PJ ${s.pj.nama}` : ""}{s.perspektif_label ? ` · ${s.perspektif_label}` : ""} · {dataInfo(s)}
+                      {s.level === "TIM" ? s.divisi?.nama : "Lembaga"}{s.pj ? ` · Owner ${s.pj.nama}` : ""}{s.perspektif ? ` · BSC ${PERSPEKTIF[s.perspektif]}` : ""} · {dataInfo(s)}
                       {s.tugas_summary.total ? ` · tugas ${s.tugas_summary.selesai}/${s.tugas_summary.total}` : ""}
                     </span>
                   </span>
@@ -181,7 +256,7 @@ function Ringkasan({ ov, visi, canCheckin, sById, onCheckin, onOpen }) {
           </ul>
         </section>
       ))}
-      {ov.sasaran.length === 0 && <p className="rounded-xl border border-dashed border-emerald-200 bg-white p-6 text-center text-sm text-emerald-800/70">Belum ada sasaran di periode ini.</p>}
+      {ov.sasaran.length === 0 && <p className="rounded-xl border border-dashed border-emerald-200 bg-white p-6 text-center text-sm text-emerald-800/70">Belum ada objective di periode ini.</p>}
     </div>
   );
 }
@@ -202,7 +277,7 @@ function DaftarSasaran({ ov, canCheckin, onCheckin, onNew, onEdit, onAddUkuran, 
         {filters.map(([k, l]) => (
           <button key={k} onClick={() => setFilter(k)} className={`rounded-full px-3 py-1 text-xs font-medium ${filter === k ? "bg-emerald-900 text-white" : "bg-white text-emerald-900 ring-1 ring-emerald-100 hover:bg-emerald-50"}`}>{l}</button>
         ))}
-        {ov.bisa_buat && <Button size="sm" onClick={onNew} className="ml-auto bg-emerald-900 text-white hover:bg-emerald-800" data-testid="sasaran-new"><Plus size={14} /> Sasaran baru</Button>}
+        {ov.bisa_buat && <Button size="sm" onClick={onNew} className="ml-auto bg-emerald-900 text-white hover:bg-emerald-800" data-testid="sasaran-new"><Plus size={14} /> Objective baru</Button>}
       </div>
       {list.map((s) => {
         const isOpen = open.has(s.id) || list.length <= 3;
@@ -213,8 +288,8 @@ function DaftarSasaran({ ov, canCheckin, onCheckin, onNew, onEdit, onAddUkuran, 
               <div className="min-w-0 flex-1">
                 <button onClick={() => toggle(s.id)} className="text-left font-display text-[15px] font-semibold text-emerald-950">{s.judul}</button>
                 <p className="mt-0.5 text-[11px] text-emerald-800/65">
-                  {s.level === "TIM" ? `Tim ${s.divisi?.nama || "-"}` : "Lembaga"}{s.pj ? ` · PJ ${s.pj.nama}` : " · belum ada PJ"}
-                  {s.perspektif_label ? ` · ${s.perspektif_label}` : ""}{s.parent_id && parentName(s.parent_id) ? ` · mendukung “${parentName(s.parent_id)}”` : ""} · {dataInfo(s)}
+                  {s.level === "TIM" ? `Tim ${s.divisi?.nama || "-"}` : "Lembaga"}{s.pj ? ` · Owner ${s.pj.nama}` : " · belum ada owner"}
+                  {s.perspektif ? ` · BSC ${PERSPEKTIF[s.perspektif]}` : ""}{s.parent_id && parentName(s.parent_id) ? ` · turunan “${parentName(s.parent_id)}”` : ""} · {dataInfo(s)}
                 </p>
                 <div className="mt-2 flex items-center gap-2"><ProgressBar pct={s.pct} status={s.status} /><span className="text-xs tabular-nums">{s.pct == null ? "–" : `${Math.round(Math.min(s.pct, 100))}%`}</span></div>
               </div>
@@ -225,13 +300,13 @@ function DaftarSasaran({ ov, canCheckin, onCheckin, onNew, onEdit, onAddUkuran, 
             </header>
             {isOpen && (
               <div className="space-y-2 border-t border-emerald-50 px-4 py-3">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-emerald-800/60">Ukuran</p>
-                {s.ukuran.length === 0 && <p className="text-xs text-emerald-800/60">Belum ada ukuran. {s.bisa_ubah ? "Tambahkan 1–3 ukuran yang menunjukkan sasaran ini tercapai." : ""}</p>}
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-emerald-800/60">Key Results <InfoTip k="KR" /></p>
+                {s.ukuran.length === 0 && <p className="text-xs text-emerald-800/60">Belum ada Key Result. {s.bisa_ubah ? "Tambahkan 2–4 angka yang membuktikan objective ini tercapai." : ""}</p>}
                 {s.ukuran.map((u) => <UkuranRow key={u.id} u={u} canCheckin={canCheckin(s, u)} canEdit={s.bisa_ubah} onCheckin={onCheckin} onEdit={(x) => onEditUkuran(s, x)} />)}
-                {s.bisa_ubah && <Button size="sm" variant="outline" onClick={() => onAddUkuran(s)} className="h-7 text-xs"><Plus size={12} /> Tambah ukuran</Button>}
+                {s.bisa_ubah && <Button size="sm" variant="outline" onClick={() => onAddUkuran(s)} className="h-7 text-xs"><Plus size={12} /> Tambah Key Result</Button>}
                 <div className="mt-2 rounded-lg bg-emerald-50/50 p-2.5">
                   <p className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-emerald-800/60"><ListChecks size={12} /> Tugas pendukung {s.tugas_summary.total ? `· ${s.tugas_summary.selesai}/${s.tugas_summary.total} selesai` : ""}</p>
-                  {s.tugas.length === 0 ? <p className="text-xs text-emerald-800/60">Belum ada. Tautkan dari form Tugas › Detail lainnya › “Mendukung sasaran”.</p> : (
+                  {s.tugas.length === 0 ? <p className="text-xs text-emerald-800/60">Belum ada. Tautkan dari form Tugas › Detail lainnya › “Mendukung objective”.</p> : (
                     <ul className="space-y-0.5 text-xs text-emerald-950">
                       {s.tugas.map((t) => <li key={t.id} className="flex justify-between gap-2"><span className="truncate">{t.nama}{t.R ? <span className="text-emerald-800/50"> · {t.R}</span> : ""}</span><span className="shrink-0 text-emerald-800/60">{t.status.replace("_", " ").toLowerCase()}</span></li>)}
                     </ul>
@@ -242,7 +317,7 @@ function DaftarSasaran({ ov, canCheckin, onCheckin, onNew, onEdit, onAddUkuran, 
           </article>
         );
       })}
-      {list.length === 0 && <p className="rounded-xl border border-dashed border-emerald-200 bg-white p-6 text-center text-sm text-emerald-800/70">Tidak ada sasaran untuk filter ini.</p>}
+      {list.length === 0 && <p className="rounded-xl border border-dashed border-emerald-200 bg-white p-6 text-center text-sm text-emerald-800/70">Tidak ada objective untuk filter ini.</p>}
     </div>
   );
 }

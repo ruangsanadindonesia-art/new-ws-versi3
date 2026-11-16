@@ -9,8 +9,8 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 
 from komitmen_pdf import EMERALD_DARK, EMERALD_TINT, MUTED, BORDER, INK, CONTENT_W, PAGE_W, _get_logo
 
-STATUS_LABEL = {"SESUAI": "Sesuai jalur", "PERHATIAN": "Perlu perhatian", "TERTINGGAL": "Tertinggal", "BELUM_ADA_DATA": "Belum ada data"}
-ARAH = {"NAIK": "Naikkan", "TURUN": "Turunkan", "JAGA": "Pertahankan"}
+STATUS_LABEL = {"SESUAI": "On track", "PERHATIAN": "At risk", "TERTINGGAL": "Off track", "BELUM_ADA_DATA": "No data"}
+ARAH = {"NAIK": "Naik", "TURUN": "Turun", "JAGA": "Jaga"}
 KESIMPULAN = {"REWARD": "Layak apresiasi", "EVALUASI": "Perlu evaluasi", "NETRAL": "Netral"}
 
 
@@ -26,7 +26,7 @@ def _fmt(v, satuan=""):
 def build_sasaran_pdf(jenis: str, data: dict, visi: dict, divisi_nama=None) -> bytes:
     buf = io.BytesIO()
     period = data["period"]
-    title = "Surat Kesepakatan Sasaran" if jenis == "komitmen" else "Evaluasi Sasaran Periode"
+    title = "Surat Kesepakatan Target (OKR & KPI)" if jenis == "komitmen" else "Evaluasi OKR & KPI Periode"
 
     def footer(c, doc):
         c.saveState(); c.setFont("Helvetica", 8); c.setFillColor(MUTED)
@@ -54,18 +54,18 @@ def build_sasaran_pdf(jenis: str, data: dict, visi: dict, divisi_nama=None) -> b
 
     if jenis == "evaluasi":
         st = data.get("stats", {})
-        story.append(Paragraph(f"Ringkasan: {st.get('sasaran', 0)} sasaran, {st.get('ukuran', 0)} ukuran — "
-                               f"{st.get('sesuai', 0)} sesuai jalur, {st.get('perhatian', 0)} perlu perhatian, "
-                               f"{st.get('tertinggal', 0)} tertinggal, {st.get('belum_data', 0)} tanpa data.", B))
+        story.append(Paragraph(f"Ringkasan: {st.get('sasaran', 0)} objective, {st.get('ukuran', 0)} key result — "
+                               f"{st.get('sesuai', 0)} on track, {st.get('perhatian', 0)} at risk, "
+                               f"{st.get('tertinggal', 0)} off track, {st.get('belum_data', 0)} no data.", B))
 
     for s in data["sasaran"]:
         lvl = "Lembaga" if s.get("level") == "LEMBAGA" else ("Tim " + (s.get("divisi") or {}).get("nama", "-"))
-        meta = f"{lvl} · PJ: {(s.get('pj') or {}).get('nama', '–')}"
+        meta = f"Objective {lvl} · Owner: {(s.get('pj') or {}).get('nama', '–')}"
         if s.get("perspektif_label"):
-            meta += f" · {s['perspektif_label']}"
+            meta += f" · BSC {s['perspektif_label']}"
         if jenis == "evaluasi":
             meta += f" · {STATUS_LABEL.get(s['status'], s['status'])}" + (f" ({s['pct']}%)" if s.get("pct") is not None else "")
-        rows = [["Ukuran", "PIC", "Arah", "Awal", "Target"] + (["Capaian", "Status"] if jenis == "evaluasi" else [])]
+        rows = [["Key Result / KPI", "PIC", "Polaritas", "Baseline", "Target"] + (["Realisasi", "Status"] if jenis == "evaluasi" else [])]
         for u in s["ukuran"]:
             r = [Paragraph(u["nama"], S), (u.get("pic") or {}).get("nama", "–"), ARAH.get(u.get("arah"), "-"),
                  _fmt(u.get("awal"), u.get("satuan")), _fmt(u.get("target"), u.get("satuan"))]
@@ -77,7 +77,7 @@ def build_sasaran_pdf(jenis: str, data: dict, visi: dict, divisi_nama=None) -> b
         tb.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), EMERALD_TINT), ("TEXTCOLOR", (0, 0), (-1, 0), EMERALD_DARK),
                                 ("FONTSIZE", (0, 0), (-1, -1), 8), ("GRID", (0, 0), (-1, -1), 0.4, BORDER),
                                 ("VALIGN", (0, 0), (-1, -1), "TOP")]))
-        block = [Paragraph(s["judul"], H2), Paragraph(meta, S), Spacer(1, 3), tb if s["ukuran"] else Paragraph("Belum ada ukuran.", S)]
+        block = [Paragraph(s["judul"], H2), Paragraph(meta, S), Spacer(1, 3), tb if s["ukuran"] else Paragraph("Belum ada key result.", S)]
         if jenis == "evaluasi" and s.get("tugas_summary", {}).get("total"):
             ts = s["tugas_summary"]
             block.append(Paragraph(f"Tugas pendukung: {ts['selesai']} dari {ts['total']} selesai.", S))
@@ -95,7 +95,7 @@ def build_sasaran_pdf(jenis: str, data: dict, visi: dict, divisi_nama=None) -> b
                 story.append(Paragraph(f"<b>{label}:</b> " + "; ".join(items), B))
     else:
         story.append(Spacer(1, 14))
-        story.append(Paragraph("Dengan ini kami menyepakati sasaran dan ukuran di atas, serta berkomitmen melakukan check-in capaian setiap pekan.", B))
+        story.append(Paragraph("Dengan ini kami menyepakati objective, key result, dan KPI di atas, serta berkomitmen melakukan check-in realisasi setiap pekan.", B))
         orang = {}
         for s in data["sasaran"]:
             for p in [s.get("pj")] + [u.get("pic") for u in s["ukuran"]]:

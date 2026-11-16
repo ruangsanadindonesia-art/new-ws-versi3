@@ -214,7 +214,7 @@ def build_mcp_router(srv) -> APIRouter:
         done = {(e if isinstance(e, dict) else e.model_dump())["item_id"] for e in ent if (e if isinstance(e, dict) else e.model_dump()).get("checked")}
         return {"tanggal": tgl, "amaliyah": [{"id": i["id"], "nama": i["nama"], "target": i.get("target_metrik"), "sudah": i["id"] in done} for i in items if i.get("aktif", True)]}
 
-    @tool("sasaran_saya", "Sasaran periode aktif: status tiap sasaran, ukuran yang saya pegang (PIC), dan mana yang perlu check-in.", {})
+    @tool("sasaran_saya", "Target Bersama periode aktif (OKR & KPI): status tiap Objective, KPI/Key Result yang saya pegang sebagai PIC, dan mana yang perlu check-in.", {})
     async def t_sasaran(user, ctx, a):
         ov = await srv.sasaran_router.overview_fn(
             (await db.strategy_periods.find_one({"active": True}, {"_id": 0, "id": 1}) or {}).get("id") or "-", user)
@@ -271,7 +271,7 @@ def build_mcp_router(srv) -> APIRouter:
         await srv.add_comment(a["task_id"], srv.CommentPayload(text=a["teks"]), ctx["actor"])
         return {"ok": True}
 
-    @tool("check_in_ukuran", "Check-in capaian terbaru sebuah ukuran sasaran (saya PIC). keyakinan: YAKIN, RAGU, atau BERISIKO. Ambil id dari sasaran_saya.",
+    @tool("check_in_ukuran", "Check-in realisasi terbaru sebuah KPI/Key Result (saya PIC). keyakinan: YAKIN, RAGU, atau BERISIKO. Ambil id dari sasaran_saya.",
           {"ukuran_id": {"type": "string"}, "nilai": {"type": "number"}, "keyakinan": {"type": "string", "enum": ["YAKIN", "RAGU", "BERISIKO"]},
            "catatan": {"type": "string", "maxLength": 500}}, ["ukuran_id", "nilai"], write=True)
     async def t_checkin(user, ctx, a):

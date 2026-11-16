@@ -167,16 +167,16 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
 
           <button type="button" onClick={() => setShowDetail((v) => !v)} data-testid="toggle-detail"
             className="flex w-full items-center justify-between rounded-md border border-dashed border-emerald-200 px-3 py-2 text-xs font-medium text-emerald-800 hover:bg-emerald-50">
-            <span>Detail lainnya{detailCount ? ` (${detailCount} terisi)` : ""} — sasaran, tipe, kolom, tanggal mulai, label{isSpv && editing ? ", catatan SPV" : ""}</span>
+            <span>Detail lainnya{detailCount ? ` (${detailCount} terisi)` : ""} — objective (OKR), tipe, kolom, tanggal mulai, label{isSpv && editing ? ", catatan SPV" : ""}</span>
             <span>{showDetail ? "Tutup" : "Buka"}</span>
           </button>
           {showDetail && (
             <div className="space-y-3 rounded-lg bg-emerald-50/40 p-3" data-testid="detail-section">
               <div>
-                <label className="text-xs font-medium text-emerald-900" htmlFor="tk-sasaran">Mendukung sasaran <span className="text-emerald-700/50">(opsional)</span></label>
+                <label className="text-xs font-medium text-emerald-900" htmlFor="tk-sasaran">Mendukung objective (OKR) <span className="text-emerald-700/50">(opsional)</span></label>
                 <select id="tk-sasaran" value={form.sasaran_id || ""} onChange={(e) => setForm({ ...form, sasaran_id: e.target.value })} disabled={!canDef}
                   data-testid="select-sasaran" className="h-9 w-full rounded-md border border-input bg-white px-2 text-sm disabled:opacity-60">
-                  <option value="">— Tidak terkait sasaran —</option>
+                  <option value="">— Tidak terkait objective —</option>
                   {sasaranList.map((s) => <option key={s.id} value={s.id}>{s.tim} · {s.judul}</option>)}
                 </select>
               </div>

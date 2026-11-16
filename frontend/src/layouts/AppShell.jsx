@@ -14,7 +14,7 @@ import SanadLogo from "@/components/SanadLogo";
 const NAV = [
   { to: "/tasks", label: "Tugas", icon: ListTodo, testId: "nav-tasks", badgeKey: "tasks" },
   { to: "/harian", label: "Harian Saya", icon: HeartHandshake, testId: "nav-harian" },
-  { to: "/sasaran", label: "Sasaran", icon: Target, testId: "nav-sasaran" },
+  { to: "/target", label: "Target Bersama", icon: Target, testId: "nav-target" },
   { to: "/laporan", label: "Laporan", icon: BarChart3, testId: "nav-laporan" },
   { to: "/pengaturan", label: "Pengaturan", icon: Settings, testId: "nav-pengaturan" },
 ];

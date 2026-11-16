@@ -46,7 +46,7 @@ export default function EvaluasiSasaran({ periodId, isSpv, divisiList }) {
     <div className="space-y-4" data-testid="evaluasi-sasaran">
       <section className="flex flex-wrap items-center gap-2 rounded-xl border border-emerald-100 bg-white p-3">
         <p className="mr-auto text-sm text-emerald-950">
-          <b>{st.sasaran || 0}</b> sasaran · <b>{st.ukuran || 0}</b> ukuran: {st.sesuai || 0} sesuai jalur, {st.perhatian || 0} perlu perhatian, {st.tertinggal || 0} tertinggal, {st.belum_data || 0} tanpa data.
+          <b>{st.sasaran || 0}</b> objective · <b>{st.ukuran || 0}</b> key result: {st.sesuai || 0} on track, {st.perhatian || 0} at risk, {st.tertinggal || 0} off track, {st.belum_data || 0} no data.
         </p>
         <select value={divisi} onChange={(e) => setDivisi(e.target.value)} className="h-8 rounded-md border border-emerald-200 bg-white px-2 text-xs" aria-label="Tim untuk PDF komitmen">
           <option value="">Komitmen: semua tim</option>
@@ -59,7 +59,7 @@ export default function EvaluasiSasaran({ periodId, isSpv, divisiList }) {
       <div className="overflow-x-auto rounded-xl border border-emerald-100 bg-white">
         <table className="w-full min-w-[720px] text-sm">
           <thead className="bg-emerald-50 text-left text-[11px] uppercase tracking-wider text-emerald-800/70">
-            <tr><th className="px-3 py-2">Sasaran / ukuran</th><th className="px-3 py-2">PIC</th><th className="px-3 py-2 text-right">Awal</th><th className="px-3 py-2 text-right">Capaian</th><th className="px-3 py-2 text-right">Target</th><th className="px-3 py-2">Check-in</th><th className="px-3 py-2">Status</th></tr>
+            <tr><th className="px-3 py-2">Objective / Key Result</th><th className="px-3 py-2">PIC</th><th className="px-3 py-2 text-right">Baseline</th><th className="px-3 py-2 text-right">Realisasi</th><th className="px-3 py-2 text-right">Target</th><th className="px-3 py-2">Check-in</th><th className="px-3 py-2">Status</th></tr>
           </thead>
           <tbody>
             {d.sasaran.map((s) => [
@@ -100,7 +100,7 @@ export default function EvaluasiSasaran({ periodId, isSpv, divisiList }) {
           ))}
         </div>
         {isSpv && <Button onClick={save} disabled={busy === "save"} className="bg-emerald-900 text-white hover:bg-emerald-800" data-testid="ev-save"><Save size={14} /> Simpan catatan</Button>}
-        <p className="text-[11px] text-emerald-800/60">Status mengikuti satu aturan: {Object.values(STATUS).map((x) => x.label).join(" · ")}. Ukuran dengan angka awal dinilai dari progres terhadap waktu; tanpa angka awal dinilai sebagai tingkat terhadap target.</p>
+        <p className="text-[11px] text-emerald-800/60">Status mengikuti satu aturan: {Object.values(STATUS).map((x) => x.label).join(" · ")}. KR dengan baseline dinilai dari progres terhadap waktu; tanpa baseline, realisasi dibanding langsung dengan target.</p>
       </section>
     </div>
   );

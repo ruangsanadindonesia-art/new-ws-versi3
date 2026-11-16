@@ -108,7 +108,7 @@ function HariIni({ onOpen }) {
       {ukuran.length > 0 && (
         <section className={`rounded-xl border ${ukuran.some((u) => u.perlu_update) ? "border-amber-200 bg-amber-50/50" : "border-emerald-100 bg-white"}`} data-testid="hari-sasaran">
           <header className="flex items-center justify-between gap-2 border-b border-emerald-50 px-4 py-3">
-            <h3 className="flex items-center gap-2 font-display text-base font-semibold text-emerald-950"><Target size={16} className="text-emerald-700" /> Check-in sasaran</h3>
+            <h3 className="flex items-center gap-2 font-display text-base font-semibold text-emerald-950"><Target size={16} className="text-emerald-700" /> Check-in KPI</h3>
             <span className="text-xs text-emerald-800">{ukuran.filter((u) => u.perlu_update).length} perlu di-update</span>
           </header>
           <ul>
@@ -124,7 +124,7 @@ function HariIni({ onOpen }) {
               </li>
             ))}
           </ul>
-          <Link to="/sasaran" className="block w-full border-t border-emerald-50 px-4 py-2 text-left text-xs font-medium text-emerald-700 hover:bg-emerald-50">Lihat semua sasaran →</Link>
+          <Link to="/target?tab=kpi" className="block w-full border-t border-emerald-50 px-4 py-2 text-left text-xs font-medium text-emerald-700 hover:bg-emerald-50">Lihat Target Bersama →</Link>
         </section>
       )}
       <CheckinDialog ukuran={ck} open={!!ck} onOpenChange={(v) => !v && setCk(null)} onSaved={loadUkuran} />

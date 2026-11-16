@@ -27,7 +27,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-PERSPEKTIF = {"KEUANGAN": "Keuangan", "SANTRI": "Santri & Pelanggan", "OPERASIONAL": "Operasional", "SDM": "SDM & Pertumbuhan"}
+# Label UI memakai istilah manajemen: Objective (sasaran), Key Result (ukuran), KPI (KR ber-PIC), perspektif BSC.
+PERSPEKTIF = {"KEUANGAN": "Financial", "SANTRI": "Customer", "OPERASIONAL": "Internal Process", "SDM": "Learning & Growth"}
 ARAH = {"NAIK": "Naikkan", "TURUN": "Turunkan", "JAGA": "Pertahankan"}
 CONFIDENCE = ("YAKIN", "RAGU", "BERISIKO")
 STALE_DAYS = 10
