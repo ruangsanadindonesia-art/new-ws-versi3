@@ -160,4 +160,4 @@
 7. **Custom SPV Signature** upload untuk PDF raport
 
 ## Test Credentials
-`/app/memory/test_credentials.md` — SPV: `akunsaktibanget06@gmail.com` / `Qolbu2026!`
+Kredensial uji tidak disimpan di repo. Minta ke SPV.

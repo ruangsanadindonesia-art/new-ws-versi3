@@ -184,6 +184,9 @@ function Card({ task, labels, anggotaMap, kategoriMap, arsipMode, selected, anyS
           ↔ Delegasi dari {anggotaMap[task.pemberi_id].nama}
         </p>
       )}
+      {task.status === "MENUNGGU_REVIEW" && (
+        <p className="mt-1.5 inline-block rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-bold text-violet-800" data-testid={`card-review-${task.id}`}>Menunggu review</p>
+      )}
       {task.status === "REVISI" && (
         <div className="mt-1.5 rounded-md border border-red-200 bg-red-50 px-2 py-1" data-testid={`card-revisi-${task.id}`}>
           <p className="text-[10px] font-bold text-red-700">REVISI{task.revisi_count > 1 ? ` #${task.revisi_count}` : ""}</p>

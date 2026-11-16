@@ -120,6 +120,8 @@ export const archiveTask = (id) => api.post(`/tasks/${id}/archive`).then((r) => 
 export const unarchiveTask = (id) => api.post(`/tasks/${id}/unarchive`).then((r) => r.data);
 export const moveTask = (id, payload) => api.post(`/tasks/${id}/move`, payload).then((r) => r.data);
 export const revisiTask = (id, catatan) => api.post(`/tasks/${id}/revisi`, { catatan }).then((r) => r.data);
+export const submitReview = (id) => api.post(`/tasks/${id}/submit_review`).then((r) => r.data);
+export const approveTask = (id) => api.post(`/tasks/${id}/approve`).then((r) => r.data);
 export const bulkDeleteTasks = (ids) => api.post(`/tasks/bulk_delete`, { ids }).then((r) => r.data);
 
 // Divisi (Tim)

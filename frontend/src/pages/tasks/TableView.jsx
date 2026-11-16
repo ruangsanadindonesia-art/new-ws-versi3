@@ -8,17 +8,18 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { TIPES } from "./shared";
-import { reorderTasks, createTaskList, updateTaskList, deleteTaskList, createTaskLabel, updateTaskLabel, deleteTaskLabel, createAnggota } from "@/lib/api";
+import { RoleTag, raciRoles, PersonSelect, PeopleSelect, RaciLegend } from "./raci";
+import { reorderTasks, createTaskList, updateTaskList, deleteTaskList, createTaskLabel, updateTaskLabel, deleteTaskLabel } from "@/lib/api";
 import { toast } from "sonner";
 
-const STATUS_LABELS = { BELUM_MULAI: "Belum Mulai", DALAM_PROSES: "Dalam Proses", SELESAI: "Selesai", TERKENDALA: "Terkendala", REVISI: "Revisi" };
-const STATUS_COLORS = { BELUM_MULAI: "bg-slate-100 text-slate-700", DALAM_PROSES: "bg-amber-100 text-amber-800", SELESAI: "bg-emerald-100 text-emerald-800", TERKENDALA: "bg-orange-100 text-orange-800", REVISI: "bg-red-100 text-red-700" };
+const STATUS_LABELS = { BELUM_MULAI: "Belum Mulai", DALAM_PROSES: "Dalam Proses", MENUNGGU_REVIEW: "Menunggu review", SELESAI: "Selesai", TERKENDALA: "Terkendala", REVISI: "Revisi" };
+const STATUS_COLORS = { BELUM_MULAI: "bg-slate-100 text-slate-700", DALAM_PROSES: "bg-amber-100 text-amber-800", MENUNGGU_REVIEW: "bg-violet-100 text-violet-800", SELESAI: "bg-emerald-100 text-emerald-800", TERKENDALA: "bg-orange-100 text-orange-800", REVISI: "bg-red-100 text-red-700" };
 
 export default function TableView({
   tasks, lists, labels, anggotaAll, divisiList, currentDivisiId,
   selectedIds, setSelectedIds,
   onSaveCell, onEdit, onMove, onArchive, onUnarchive, onDelete, onReorderLocal, arsipMode,
-  refreshLists, refreshLabels, refreshAnggota, isSpv = true,
+  refreshLists, refreshLabels, refreshAnggota, isSpv = true, myAnggotaId = null, onSetujui = null, emptyText = "Tidak ada tugas.",
 }) {
   const listMap = Object.fromEntries(lists.map((l) => [l.id, l]));
   const labelMap = Object.fromEntries(labels.map((l) => [l.id, l]));
@@ -43,9 +44,10 @@ export default function TableView({
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
       <div className="overflow-hidden rounded-xl border border-emerald-100 bg-white" data-testid="task-table">
+        <div className="flex items-center gap-3 border-b border-emerald-100 px-3 py-1.5 text-[11px] text-emerald-800/70"><RaciLegend /><span>Kolom bertanda R/A/C/I adalah pembagian peran tiap tugas.</span></div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1280px] text-sm">
-            <thead className="bg-emerald-50 text-left">
+          <table className="w-full min-w-[1400px] text-sm">
+            <thead className="whitespace-nowrap bg-emerald-50 text-left">
               <tr>
                 <th className="w-12 p-3">
                   {anySelected ? (
@@ -62,10 +64,10 @@ export default function TableView({
                     onUpdate={async (item, patch) => { await updateTaskList(item.id, { ...item, ...patch }); }}
                     onDelete={async (id) => { await deleteTaskList(id); }} />
                 </th>
-                <th className="p-3 font-semibold text-emerald-900">
-                  <ColumnHeader label="Penerima" items={anggotaAll.filter((a) => a.divisi_id === currentDivisiId)} refresh={refreshAnggota}
-                    onCreate={isSpv ? async (nama) => { await createAnggota({ nama, divisi_id: currentDivisiId }); } : null} />
-                </th>
+                <th className="w-36 p-3 font-semibold text-emerald-900" title="Responsible — mengerjakan"><span className="inline-flex items-center gap-1.5"><RoleTag role="R" /> Mengerjakan</span></th>
+                <th className="w-36 p-3 font-semibold text-emerald-900" title="Accountable — menyetujui hasil"><span className="inline-flex items-center gap-1.5"><RoleTag role="A" /> Penyetuju</span></th>
+                <th className="w-36 p-3 font-semibold text-emerald-900" title="Consulted — dimintai masukan"><span className="inline-flex items-center gap-1.5"><RoleTag role="C" /> Konsultasi</span></th>
+                <th className="w-32 p-3 font-semibold text-emerald-900" title="Informed — diberi kabar"><span className="inline-flex items-center gap-1.5 whitespace-nowrap"><RoleTag role="I" /> Info</span></th>
                 <th className="p-3 font-semibold text-emerald-900">
                   <ColumnHeader label="Label" items={labels} refresh={refreshLabels}
                     onCreate={async (nama) => { await createTaskLabel({ nama, warna: "#f59e0b" }); }}
@@ -85,11 +87,11 @@ export default function TableView({
                     selected={selectedIds.includes(t.id)} anySelected={anySelected}
                     onToggleSelect={() => toggleSelect(t.id)} onSaveCell={onSaveCell}
                     onEdit={onEdit} onMove={onMove} onArchive={onArchive} onUnarchive={onUnarchive} onDelete={onDelete}
-                    arsipMode={arsipMode} isSpv={isSpv}
+                    arsipMode={arsipMode} isSpv={isSpv} myAnggotaId={myAnggotaId} onSetujui={onSetujui}
                     refreshLists={refreshLists} refreshLabels={refreshLabels} refreshAnggota={refreshAnggota} />
                 ))}
                 {tasks.length === 0 && (
-                  <tr><td colSpan={9} className="p-8 text-center text-sm text-emerald-800/60">Tidak ada tugas.</td></tr>
+                  <tr><td colSpan={12} className="p-8 text-center text-sm text-emerald-800/60">{emptyText}</td></tr>
                 )}
               </tbody>
             </SortableContext>
@@ -149,14 +151,15 @@ function ColumnHeader({ label, items, onCreate, onUpdate, onDelete, refresh }) {
   );
 }
 
-function Row({ task, idx, lists, labels, labelMap, listMap, anggotaAll, anggotaMap, divisiList, currentDivisiId, selected, anySelected, onToggleSelect, onSaveCell, onEdit, onMove, onArchive, onUnarchive, onDelete, arsipMode, isSpv = true, refreshLists, refreshLabels, refreshAnggota }) {
+function Row({ task, idx, lists, labels, labelMap, listMap, anggotaAll, anggotaMap, divisiList, currentDivisiId, selected, anySelected, onToggleSelect, onSaveCell, onEdit, onMove, onArchive, onUnarchive, onDelete, arsipMode, isSpv = true, myAnggotaId = null, onSetujui = null, refreshLists, refreshLabels, refreshAnggota }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
   const isRutin = task.kategori !== "PROJECT";
   const isMoved = !!task.moved_at;
-  const isDelegasi = task.pemberi_id && task.penerima_tugas_id && task.pemberi_id !== task.penerima_tugas_id;
-  const anggota = task.penerima_tugas_id ? anggotaMap[task.penerima_tugas_id] : null;
-  const pemberiAnggota = task.pemberi_id ? anggotaMap[task.pemberi_id] : null;
+  const myRoles = raciRoles(task, myAnggotaId);
+  const canDef = isSpv || myRoles.includes("A");
+  const canWork = isSpv || myRoles.includes("R");
+  const raciExclude = [task.penerima_tugas_id, task.pemberi_id].filter(Boolean);
 
   return (
     <tr ref={setNodeRef} style={style}
@@ -176,15 +179,15 @@ function Row({ task, idx, lists, labels, labelMap, listMap, anggotaAll, anggotaM
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
             <button onClick={() => onEdit(task)} className="block w-full truncate text-left font-medium text-emerald-950 hover:text-emerald-700 hover:underline" data-testid={`row-nama-${task.id}`}>{task.nama}</button>
-            {(isMoved || isDelegasi || task.brief_link || task.status === "REVISI") && (
+            {(isMoved || myRoles.length > 0 || task.brief_link || task.status === "REVISI") && (
               <div className="mt-1 flex flex-wrap items-center gap-1">
                 {isMoved && <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[9px] font-bold text-red-700">BARU</span>}
                 {task.status === "REVISI" && (
                   <span className="rounded-full bg-red-600 px-1.5 py-0.5 text-[9px] font-bold text-white" data-testid={`row-revisi-${task.id}`}
                     title={task.revisi_catatan || ""}>REVISI{task.revisi_count > 1 ? ` #${task.revisi_count}` : ""}</span>
                 )}
-                {isDelegasi && pemberiAnggota && (
-                  <span className="rounded-full bg-sky-100 px-1.5 py-0.5 text-[9px] font-bold text-sky-700" data-testid={`row-delegasi-${task.id}`}>Dari {pemberiAnggota.nama}</span>
+                {myRoles.length > 0 && (
+                  <span className="inline-flex items-center gap-0.5 text-[9px] text-emerald-800/60" data-testid={`row-peran-${task.id}`}>Anda: {myRoles.map((r) => <RoleTag key={r} role={r} />)}</span>
                 )}
                 {task.brief_link && (
                   <a href={task.brief_link} target="_blank" rel="noopener noreferrer" data-testid={`row-brief-${task.id}`}
@@ -214,23 +217,38 @@ function Row({ task, idx, lists, labels, labelMap, listMap, anggotaAll, anggotaM
 
       <td className="p-2">
         {isRutin ? (
-          <span className="inline-flex items-center gap-1 rounded-full bg-purple-100 px-2.5 py-1 text-[11px] font-semibold text-purple-800">
+          <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-purple-100 px-2.5 py-1 text-[11px] font-semibold text-purple-800">
             <Repeat size={10} /> On Tracker
           </span>
-        ) : task.list_id && !listMap[task.list_id] ? (
+        ) : (task.list_id && !listMap[task.list_id]) || ["MENUNGGU_REVIEW", "REVISI", "TERKENDALA"].includes(task.status) ? (
           // List milik divisi lain (delegasi) → tampilkan status sebagai badge statis
           <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ${STATUS_COLORS[task.status] || STATUS_COLORS.BELUM_MULAI}`} data-testid={`row-status-${task.id}`}>
             {STATUS_LABELS[task.status] || task.status}
           </span>
         ) : (
+          !canWork ? (
+            <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ${STATUS_COLORS[task.status] || STATUS_COLORS.BELUM_MULAI}`}>{STATUS_LABELS[task.status] || task.status}</span>
+          ) :
           <CellSelectWithAdd value={task.list_id} options={lists} onChange={(v) => onSaveCell(task.id, { list_id: v })}
             onAddInline={async (nama) => { await createTaskList({ nama, divisi_id: currentDivisiId }); refreshLists(); }} testId={`row-list-${task.id}`} placeholder="—" />
         )}
       </td>
 
       <td className="p-2">
-        <CellSelectAnggota value={task.penerima_tugas_id} anggotaAll={anggotaAll} divisiList={divisiList} onChange={(v) => onSaveCell(task.id, { penerima_tugas_id: v })}
-          onAddInline={isSpv ? async (nama) => { await createAnggota({ nama, divisi_id: currentDivisiId }); refreshAnggota(); } : null} testId={`row-penerima-${task.id}`} current={anggota} />
+        <PersonSelect compact value={task.penerima_tugas_id} anggotaAll={anggotaAll} divisiList={divisiList} disabled={!canDef}
+          onChange={(v) => onSaveCell(task.id, { penerima_tugas_id: v })} placeholder="—" testId={`row-raci-r-${task.id}`} />
+      </td>
+      <td className="p-2">
+        <PersonSelect compact value={task.pemberi_id} anggotaAll={anggotaAll} divisiList={divisiList} disabled={!canDef}
+          onChange={(v) => onSaveCell(task.id, { pemberi_id: v })} placeholder="—" testId={`row-raci-a-${task.id}`} />
+      </td>
+      <td className="p-2">
+        <PeopleSelect compact value={task.consulted_ids || []} anggotaAll={anggotaAll} divisiList={divisiList} exclude={raciExclude} disabled={!canDef}
+          onChange={(v) => onSaveCell(task.id, { consulted_ids: v })} placeholder="+ C" testId={`row-raci-c-${task.id}`} />
+      </td>
+      <td className="p-2">
+        <PeopleSelect compact value={task.informed_ids || []} anggotaAll={anggotaAll} divisiList={divisiList} exclude={[...raciExclude, ...(task.consulted_ids || [])]} disabled={!canDef}
+          onChange={(v) => onSaveCell(task.id, { informed_ids: v })} placeholder="+ I" testId={`row-raci-i-${task.id}`} />
       </td>
 
       <td className="p-2">
@@ -244,7 +262,7 @@ function Row({ task, idx, lists, labels, labelMap, listMap, anggotaAll, anggotaM
           data-testid={`row-mulai-${task.id}`} />
       </td>
       <td className="p-2">
-        <input type="date" defaultValue={task.deadline || ""}
+        <input type="date" defaultValue={task.deadline || ""} disabled={!canDef}
           onBlur={(e) => e.target.value !== (task.deadline || "") && onSaveCell(task.id, { deadline: e.target.value || null })}
           className="w-full rounded border-transparent bg-transparent px-2 py-1 text-xs text-emerald-900 hover:border-emerald-200 focus:border-emerald-400 focus:outline-none"
           data-testid={`row-deadline-${task.id}`} />
@@ -260,6 +278,10 @@ function Row({ task, idx, lists, labels, labelMap, listMap, anggotaAll, anggotaM
           <p className="mt-1 line-clamp-2 break-words text-[10px] text-emerald-800/70">{task.hasil_catatan}</p>
         ) : null}
         {!task.hasil_link && !task.hasil_catatan && <span className="text-xs text-emerald-800/30">—</span>}
+        {task.status === "MENUNGGU_REVIEW" && canDef && onSetujui && (
+          <button onClick={() => onSetujui(task.id)} data-testid={`row-setujui-${task.id}`}
+            className="mt-1 block rounded-full bg-emerald-700 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-emerald-800">Setujui</button>
+        )}
       </td>
     </tr>
   );
@@ -332,63 +354,6 @@ function CellSelectWithAdd({ value, options, onChange, onAddInline, testId, plac
           ) : (
             <button onClick={() => setAdding(true)} className="flex w-full items-center gap-1 rounded px-2 py-1 text-left text-xs text-emerald-700 hover:bg-emerald-50">
               <Plus size={11} /> Buat baru
-            </button>
-          )}
-        </div>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-function CellSelectAnggota({ value, anggotaAll, divisiList, onChange, onAddInline, testId, current }) {
-  const [open, setOpen] = useState(false);
-  const [adding, setAdding] = useState(false);
-  const [nama, setNama] = useState("");
-  const submit = async () => { if (!nama.trim()) return; await onAddInline(nama.trim()); setNama(""); setAdding(false); };
-  const grouped = {}; anggotaAll.forEach((a) => { const k = a.divisi_id; if (!grouped[k]) grouped[k] = []; grouped[k].push(a); });
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button className="w-full rounded px-2 py-1 text-left text-xs text-emerald-900 hover:bg-emerald-50" data-testid={testId}>
-          {current ? (
-            <span className="inline-flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full" style={{ background: current.warna }} />{current.nama}
-            </span>
-          ) : <span className="text-emerald-800/40">—</span>}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent className="w-56 p-1" align="start">
-        <button onClick={() => { onChange(null); setOpen(false); }} className="flex w-full items-center rounded px-2 py-1 text-left text-xs italic text-emerald-700/70 hover:bg-emerald-50">Kosongkan</button>
-        <div className="max-h-56 overflow-auto">
-          {divisiList.map((d) => {
-            const arr = grouped[d.id] || [];
-            if (arr.length === 0) return null;
-            return (
-              <div key={d.id}>
-                <p className="mt-1 px-2 text-[9px] uppercase font-semibold text-emerald-800/50">{d.nama}</p>
-                {arr.map((a) => (
-                  <button key={a.id} onClick={() => { onChange(a.id); setOpen(false); }}
-                    className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-emerald-50">
-                    <span className="h-2.5 w-2.5 rounded-full" style={{ background: a.warna }} />
-                    <span className="flex-1">{a.nama}</span>
-                    {value === a.id && <Check size={12} className="text-emerald-700" />}
-                  </button>
-                ))}
-              </div>
-            );
-          })}
-        </div>
-        <div className="mt-1 border-t border-emerald-100 pt-1">
-          {adding ? (
-            <div className="flex gap-1 p-1">
-              <Input autoFocus className="h-6 text-xs" value={nama} onChange={(e) => setNama(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && submit()} placeholder="Nama anggota baru..." />
-              <button onClick={submit} className="rounded bg-emerald-700 px-1.5 text-white hover:bg-emerald-800"><Check size={11} /></button>
-              <button onClick={() => setAdding(false)} className="rounded px-1.5 text-slate-500 hover:bg-slate-50"><X size={11} /></button>
-            </div>
-          ) : (
-            <button onClick={() => setAdding(true)} className="flex w-full items-center gap-1 rounded px-2 py-1 text-left text-xs text-emerald-700 hover:bg-emerald-50">
-              <Plus size={11} /> Tambah anggota (tim aktif)
             </button>
           )}
         </div>

@@ -62,6 +62,36 @@ class ApiKeyCreatePayload(BaseModel):
     name: str = Field(min_length=1, max_length=80)
 
 
+# ============== LOGIN RATE LIMIT ==============
+# In-memory (per proses). Cukup untuk 1 worker uvicorn; mencegah tebak password massal.
+import time
+_LOGIN_FAILS: dict = {}
+LOGIN_MAX_FAILS = 8
+LOGIN_WINDOW_SEC = 15 * 60
+
+
+def _client_ip(request: Request) -> str:
+    return (request.headers.get("CF-Connecting-IP") or request.headers.get("X-Real-IP")
+            or (request.client.host if request.client else "-"))
+
+
+def _login_blocked(keys) -> bool:
+    now = time.time()
+    for k in keys:
+        arr = [t for t in _LOGIN_FAILS.get(k, []) if now - t < LOGIN_WINDOW_SEC]
+        _LOGIN_FAILS[k] = arr
+        limit = LOGIN_MAX_FAILS if k.startswith("e:") else LOGIN_MAX_FAILS * 4
+        if len(arr) >= limit:
+            return True
+    return False
+
+
+def _login_fail(keys):
+    now = time.time()
+    for k in keys:
+        _LOGIN_FAILS.setdefault(k, []).append(now)
+
+
 # ============== HELPERS ==============
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
@@ -85,14 +115,14 @@ def _set_session_cookie(response: Response, token: str):
         value=token,
         httponly=True,
         secure=True,
-        samesite="none",
+        samesite="lax",
         max_age=SESSION_DAYS * 24 * 60 * 60,
         path="/",
     )
 
 
 def _clear_session_cookie(response: Response):
-    response.delete_cookie(key=SESSION_COOKIE, path="/")
+    response.delete_cookie(key=SESSION_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
 
 
 async def _create_session(db, user_id: str, source: str = "local") -> str:
@@ -157,12 +187,15 @@ def make_auth_dependencies(db):
 
 # ============== SEED ==============
 async def seed_admin(db):
-    email = (os.environ.get("ADMIN_EMAIL") or "admin@example.com").lower()
-    password = os.environ.get("ADMIN_PASSWORD") or "admin12345"
+    # Tanpa ADMIN_EMAIL/ADMIN_PASSWORD di env: JANGAN buat akun default (dulu admin@example.com/admin12345).
+    email = (os.environ.get("ADMIN_EMAIL") or "").strip().lower()
+    password = os.environ.get("ADMIN_PASSWORD") or ""
     name = os.environ.get("ADMIN_NAME") or "Admin SPV"
 
-    existing = await db.users.find_one({"email": email})
-    if existing is None:
+    existing = await db.users.find_one({"email": email}) if email else None
+    if not email or not password or len(password) < 12:
+        pass  # seeding dimatikan; hanya buat index di bawah
+    elif existing is None:
         user_id = f"user_{uuid.uuid4().hex[:12]}"
         await db.users.insert_one({
             "user_id": user_id,
@@ -176,16 +209,7 @@ async def seed_admin(db):
             "anggota_id": None,
             "created_at": datetime.now(timezone.utc),
         })
-    else:
-        upd = {}
-        if not existing.get("password_hash") or not verify_password(password, existing["password_hash"]):
-            upd["password_hash"] = hash_password(password)
-        if existing.get("role") != "spv":
-            upd["role"] = "spv"
-        if existing.get("status") != "approved":
-            upd["status"] = "approved"
-        if upd:
-            await db.users.update_one({"email": email}, {"$set": upd})
+    # Akun yang sudah ada TIDAK di-reset otomatis (dulu password & role dipaksa ulang setiap restart).
 
     # Indexes
     try:
@@ -227,13 +251,16 @@ def build_auth_router(db: AsyncIOMotorDatabase) -> APIRouter:
         return {"ok": True, "status": "pending", "message": "Menunggu approval SPV."}
 
     @router.post("/login")
-    async def login(payload: LoginPayload, response: Response):
+    async def login(payload: LoginPayload, request: Request, response: Response):
         email = payload.email.lower()
+        rl_keys = [f"e:{email}", f"i:{_client_ip(request)}"]
+        if _login_blocked(rl_keys):
+            raise HTTPException(429, "Terlalu banyak percobaan login gagal. Coba lagi 15 menit lagi.")
         user = await db.users.find_one({"email": email})
-        if not user or not user.get("password_hash"):
+        if not user or not user.get("password_hash") or not verify_password(payload.password, user["password_hash"]):
+            _login_fail(rl_keys)
             raise HTTPException(401, "Email atau password salah.")
-        if not verify_password(payload.password, user["password_hash"]):
-            raise HTTPException(401, "Email atau password salah.")
+        _LOGIN_FAILS.pop(f"e:{email}", None)
         if user.get("status") == "pending":
             # Return user info so the frontend can route to /pending, but do NOT issue a session cookie.
             return {"ok": False, "status": "pending", "user": _sanitize(user), "message": "Akun menunggu approval SPV."}
@@ -241,7 +268,7 @@ def build_auth_router(db: AsyncIOMotorDatabase) -> APIRouter:
             raise HTTPException(403, "Akun Anda ditolak. Hubungi SPV.")
         token = await _create_session(db, user["user_id"], "local")
         _set_session_cookie(response, token)
-        return {"ok": True, "status": "approved", "user": _sanitize(user), "session_token": token}
+        return {"ok": True, "status": "approved", "user": _sanitize(user)}
 
     @router.post("/google/session")
     async def google_session(payload: GoogleSessionPayload, response: Response):
