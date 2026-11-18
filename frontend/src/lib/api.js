@@ -1,7 +1,8 @@
 import axios from "axios";
 
-const BASE = process.env.REACT_APP_BACKEND_URL;
-export const API = `${BASE}/api`;
+// API selalu di origin yang sama dengan halaman: mencegah CORS/"Network Error"
+// bila halaman dibuka lewat http:// atau domain lain (mis. pintasan HP lama).
+export const API = "/api";
 
 export const api = axios.create({
   baseURL: API,
