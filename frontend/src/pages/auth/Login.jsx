@@ -1,11 +1,12 @@
 import { useState, useEffect } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate, Link, useSearchParams } from "react-router-dom";
 import { LogIn, Mail, Lock, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth, formatApiErr } from "@/lib/AuthContext";
 import SanadLogo from "@/components/SanadLogo";
+import { api } from "@/lib/api";
 
 export default function Login() {
   const { login, logout, user, loading } = useAuth();
@@ -13,10 +14,19 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const [googleMandiri, setGoogleMandiri] = useState(false);
 
   useEffect(() => {
     if (user && user.status === "approved") navigate("/", { replace: true });
   }, [user, navigate]);
+
+  useEffect(() => {
+    api.get("/auth/config").then((r) => setGoogleMandiri(!!r.data?.google_mandiri)).catch(() => {});
+    const err = params.get("google_error");
+    if (err) { toast.error(err); params.delete("google_error"); setParams(params, { replace: true }); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -35,6 +45,9 @@ export default function Login() {
   };
 
   const googleLogin = () => {
+    // Login Google mandiri (OAuth langsung ke Google) bila server sudah dikonfigurasi.
+    if (googleMandiri) { window.location.href = "/api/auth/google/start"; return; }
+    // Cadangan lama via Emergent:
     // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
     const redirectUrl = window.location.origin + "/";
     window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;

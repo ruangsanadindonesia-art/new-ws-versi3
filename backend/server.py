@@ -111,7 +111,7 @@ async def _assert_bulk_task_access(ids: List[str], user: dict) -> List[dict]:
 
 
 PUBLIC_PATHS = {"/api", "/api/"}
-AUTH_PUBLIC_PREFIXES = ("/api/auth/register", "/api/auth/login", "/api/auth/google", "/api/auth/me", "/api/auth/logout",
+AUTH_PUBLIC_PREFIXES = ("/api/auth/register", "/api/auth/login", "/api/auth/google", "/api/auth/config", "/api/auth/me", "/api/auth/logout",
                         "/api/mcp")  # /api/mcp mengautentikasi API key sendiri (agent_mcp.py)
 
 

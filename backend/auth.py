@@ -1,4 +1,4 @@
-"""Authentication module - Emergent Google + custom email/password."""
+"""Authentication module - Google OAuth mandiri (fallback Emergent) + email/password."""
 import os
 import uuid
 import secrets
@@ -7,13 +7,36 @@ import bcrypt
 import httpx
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+import base64
+import json
+from urllib.parse import urlencode, quote
 from fastapi import APIRouter, HTTPException, Request, Response, Depends
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, Field
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 
 EMERGENT_AUTH_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
 SESSION_COOKIE = "session_token"
+GOOGLE_STATE_COOKIE = "g_oauth_state"
+GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+
+
+def _google_cfg():
+    """Google OAuth mandiri aktif bila GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET ada di .env."""
+    cid, sec = os.environ.get("GOOGLE_CLIENT_ID"), os.environ.get("GOOGLE_CLIENT_SECRET")
+    if not cid or not sec:
+        return None
+    return {"client_id": cid, "client_secret": sec,
+            "redirect_uri": os.environ.get("GOOGLE_REDIRECT_URI", "https://workspace.ruangsanad.com/api/auth/google/callback")}
+
+
+def _jwt_claims(token: str) -> dict:
+    """Ambil payload id_token. Aman tanpa cek tanda tangan karena token diterima langsung dari
+    endpoint token Google lewat TLS dengan client secret (OIDC Core 3.1.3.7)."""
+    part = token.split(".")[1]
+    return json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
 SESSION_DAYS = 7
 
 
@@ -283,7 +306,20 @@ def build_auth_router(db: AsyncIOMotorDatabase) -> APIRouter:
         if not email:
             raise HTTPException(400, "Email Google tidak ditemukan.")
         emergent_token = data.get("session_token")
+        user = await _upsert_google_user(email, data.get("name"), data.get("picture"))
+        # Always issue our own session cookie
+        token = await _create_session(db, user["user_id"], "google")
+        # Also store the Emergent token for reference
+        if emergent_token:
+            await db.user_sessions.update_one(
+                {"session_token": token},
+                {"$set": {"emergent_token": emergent_token}},
+            )
+        _set_session_cookie(response, token)
+        return {"ok": True, "user": _sanitize(user), "status": user.get("status")}
 
+    async def _upsert_google_user(email: str, name: Optional[str], picture: Optional[str]) -> dict:
+        data = {"name": name, "picture": picture}
         existing = await db.users.find_one({"email": email})
         if existing:
             upd = {"picture": data.get("picture") or existing.get("picture", "")}
@@ -307,17 +343,64 @@ def build_auth_router(db: AsyncIOMotorDatabase) -> APIRouter:
                 "created_at": datetime.now(timezone.utc),
             }
             await db.users.insert_one(user)
+        return user
 
-        # Always issue our own session cookie
+    # ---------- Google OAuth mandiri (tanpa Emergent) ----------
+    @router.get("/config")
+    async def auth_config():
+        return {"google_mandiri": _google_cfg() is not None}
+
+    @router.get("/google/start")
+    async def google_start():
+        cfg = _google_cfg()
+        if not cfg:
+            raise HTTPException(404, "Login Google mandiri belum dikonfigurasi.")
+        state = secrets.token_urlsafe(24)
+        q = urlencode({"client_id": cfg["client_id"], "redirect_uri": cfg["redirect_uri"], "response_type": "code",
+                       "scope": "openid email profile", "state": state, "prompt": "select_account"})
+        resp = RedirectResponse(f"{GOOGLE_AUTH_URL}?{q}", status_code=302)
+        resp.set_cookie(GOOGLE_STATE_COOKIE, state, max_age=600, httponly=True, secure=True, samesite="lax", path="/api/auth/google")
+        return resp
+
+    def _gagal(pesan: str) -> RedirectResponse:
+        resp = RedirectResponse("/login?google_error=" + quote(pesan), status_code=302)
+        resp.delete_cookie(GOOGLE_STATE_COOKIE, path="/api/auth/google")
+        return resp
+
+    @router.get("/google/callback")
+    async def google_callback(request: Request, code: Optional[str] = None, state: Optional[str] = None, error: Optional[str] = None):
+        cfg = _google_cfg()
+        if not cfg:
+            return _gagal("Login Google mandiri belum dikonfigurasi.")
+        if error:
+            return _gagal("Login Google dibatalkan." if error == "access_denied" else f"Google menolak: {error}")
+        saved = request.cookies.get(GOOGLE_STATE_COOKIE)
+        if not code or not state or not saved or not secrets.compare_digest(saved, state):
+            return _gagal("Sesi login kedaluwarsa. Silakan coba lagi.")
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                r = await client.post(GOOGLE_TOKEN_URL, data={"code": code, "client_id": cfg["client_id"], "client_secret": cfg["client_secret"],
+                                                              "redirect_uri": cfg["redirect_uri"], "grant_type": "authorization_code"})
+        except Exception:
+            return _gagal("Tidak bisa menghubungi Google. Coba lagi.")
+        if r.status_code != 200 or "id_token" not in r.json():
+            return _gagal("Kode login Google tidak valid. Coba lagi.")
+        c = _jwt_claims(r.json()["id_token"])
+        if c.get("aud") != cfg["client_id"] or c.get("iss") not in ("https://accounts.google.com", "accounts.google.com"):
+            return _gagal("Token Google tidak sah.")
+        if int(c.get("exp", 0)) < datetime.now(timezone.utc).timestamp():
+            return _gagal("Token Google kedaluwarsa. Coba lagi.")
+        email = (c.get("email") or "").lower()
+        if not email or not c.get("email_verified"):
+            return _gagal("Email Google belum terverifikasi.")
+        user = await _upsert_google_user(email, c.get("name"), c.get("picture"))
+        if user.get("status") == "rejected":
+            return _gagal("Akun Anda ditolak. Hubungi SPV.")
         token = await _create_session(db, user["user_id"], "google")
-        # Also store the Emergent token for reference
-        if emergent_token:
-            await db.user_sessions.update_one(
-                {"session_token": token},
-                {"$set": {"emergent_token": emergent_token}},
-            )
-        _set_session_cookie(response, token)
-        return {"ok": True, "user": _sanitize(user), "status": user.get("status")}
+        resp = RedirectResponse("/pending" if user.get("status") == "pending" else "/", status_code=302)
+        _set_session_cookie(resp, token)
+        resp.delete_cookie(GOOGLE_STATE_COOKIE, path="/api/auth/google")
+        return resp
 
     @router.get("/me")
     async def me(request: Request):
