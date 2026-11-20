@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, CalendarClock, Clock, Hourglass, Eye, Loader2, RefreshCw, Search, BellRing, CalendarPlus, X, Users2, CircleDashed } from "lucide-react";
+import { AlertTriangle, CalendarClock, Clock, Hourglass, Eye, Loader2, RefreshCw, Search, BellRing, CalendarPlus, X, Users2, CircleDashed, MessageSquare, ListTodo, HeartHandshake } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth, formatApiErr } from "@/lib/AuthContext";
-import { api, updateTask, taskAddComment } from "@/lib/api";
+import { api, updateTask, taskAddComment, listAnggota } from "@/lib/api";
+import TaskDetailSheet from "@/pages/monitoring/TaskDetailSheet";
+import AmaliyahKontrol from "@/pages/monitoring/AmaliyahKontrol";
 
 // Pusat Kendali: satu layar untuk memastikan tidak ada tugas tim yang terlambat.
 const BUCKET = {
@@ -37,6 +39,10 @@ export default function Monitoring() {
   const [orang, setOrang] = useState("");
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState({});
+  const [panel, setPanel] = useState("tugas"); // tugas | amaliyah
+  const [detail, setDetail] = useState(null);
+  const [anggotaMap, setAnggotaMap] = useState({});
+  useEffect(() => { listAnggota().then((a) => setAnggotaMap(Object.fromEntries(a.map((x) => [x.id, x])))).catch(() => {}); }, []);
   const [timList, setTimList] = useState([]); // ringkasan semua tim (dari muatan tanpa filter)
 
   const load = async (t = tim) => {
@@ -88,11 +94,15 @@ export default function Monitoring() {
       {/* Header */}
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-emerald-100 bg-white px-4 py-3">
         <div className="min-w-0 flex-1">
-          <h3 className="font-display text-lg font-semibold text-emerald-950">Pusat Kendali Tugas</h3>
+          <h3 className="font-display text-lg font-semibold text-emerald-950">Pusat Kendali</h3>
           <p className="text-xs text-emerald-800/70">
             {butuh ? <><b className="text-red-700">{butuh} tugas</b> butuh tindakan hari ini.</> : "Tidak ada tugas terlambat atau jatuh tempo hari ini."}
             {" "}Diperbarui {new Date(d.dihitung_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}.
           </p>
+        </div>
+        <div className="flex rounded-lg border border-emerald-200 bg-white p-1" role="tablist">
+          <button onClick={() => setPanel("tugas")} data-testid="panel-tugas" className={`flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium ${panel === "tugas" ? "bg-emerald-900 text-white" : "text-emerald-800"}`}><ListTodo size={13} /> Tugas</button>
+          <button onClick={() => setPanel("amaliyah")} data-testid="panel-amaliyah" className={`flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium ${panel === "amaliyah" ? "bg-emerald-900 text-white" : "text-emerald-800"}`}><HeartHandshake size={13} /> Amaliyah</button>
         </div>
         <Button size="sm" variant="outline" onClick={() => load()} disabled={loading} className="h-8 text-xs" data-testid="kendali-refresh">
           {loading ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Muat ulang
@@ -110,6 +120,7 @@ export default function Monitoring() {
         </div>
       )}
 
+      {panel === "amaliyah" ? <AmaliyahKontrol tim={tim} isSpv={isSpv} /> : (<>
       {/* Ringkasan */}
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
         {Object.entries(BUCKET).map(([k, b]) => {
@@ -154,7 +165,8 @@ export default function Monitoring() {
                 {g.list.map((i) => (
                   <li key={i.id} className="flex flex-col gap-2 px-4 py-2.5 sm:flex-row sm:items-center" data-testid={`kendali-item-${i.id}`}>
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-emerald-950" title={i.nama}>
+                      <p role="button" tabIndex={0} onClick={() => setDetail(i.id)} onKeyDown={(e) => e.key === "Enter" && setDetail(i.id)}
+                        className="cursor-pointer truncate text-sm font-medium text-emerald-950 hover:text-emerald-700 hover:underline" title="Buka detail & diskusi" data-testid={`kendali-buka-${i.id}`}>
                         {i.prioritas && <span className={`mr-1.5 rounded px-1.5 py-px text-[10px] font-semibold ${PRIO[i.prioritas]}`}>{i.prioritas[0] + i.prioritas.slice(1).toLowerCase()}</span>}
                         {i.nama}
                       </p>
@@ -169,12 +181,15 @@ export default function Monitoring() {
                         <p className={`text-xs font-semibold ${g.k === "TERLAMBAT" ? "text-red-700" : g.k === "HARI_INI" ? "text-amber-700" : "text-emerald-900"}`}>{waktuTeks(i)}</p>
                         <p className="text-[10px] text-emerald-800/50">{fmtTgl(i.deadline, i.deadline_jam)}</p>
                       </div>
-                      <Button size="sm" variant="outline" disabled={!!busy[i.id] || !i.r_id} onClick={() => ingatkan(i)} title="Kirim komentar pengingat ke yang mengerjakan" className="h-8 px-2 text-xs" data-testid={`ingatkan-${i.id}`}>
-                        {busy[i.id] === "ingat" ? <Loader2 size={13} className="animate-spin" /> : <BellRing size={13} />}<span className="hidden sm:inline">Ingatkan</span>
+                      <Button size="sm" variant="outline" onClick={() => setDetail(i.id)} title="Lihat detail & diskusikan kendala" className="h-8 px-2 text-xs" data-testid={`diskusi-${i.id}`}>
+                        <MessageSquare size={13} /><span className="hidden sm:inline">Diskusi</span>
+                      </Button>
+                      <Button size="sm" variant="ghost" disabled={!!busy[i.id] || !i.r_id} onClick={() => ingatkan(i)} title="Kirim komentar pengingat ke yang mengerjakan" className="h-8 px-2 text-xs" data-testid={`ingatkan-${i.id}`}>
+                        {busy[i.id] === "ingat" ? <Loader2 size={13} className="animate-spin" /> : <BellRing size={13} />}<span className="hidden lg:inline">Ingatkan</span>
                       </Button>
                       {isSpv && (
                         <Button size="sm" variant="ghost" disabled={!!busy[i.id]} onClick={() => undur(i, g.k === "TANPA_DEADLINE" ? 3 : 2)} title={g.k === "TANPA_DEADLINE" ? "Beri deadline 3 hari dari sekarang" : "Undur deadline 2 hari"} className="h-8 px-2 text-xs text-emerald-800" data-testid={`undur-${i.id}`}>
-                          <CalendarPlus size={13} /><span className="hidden sm:inline">{g.k === "TANPA_DEADLINE" ? "Beri +3h" : "+2 hari"}</span>
+                          <CalendarPlus size={13} /><span className="hidden lg:inline">{g.k === "TANPA_DEADLINE" ? "Beri +3h" : "+2 hari"}</span>
                         </Button>
                       )}
                     </div>
@@ -249,6 +264,8 @@ export default function Monitoring() {
           </section>
         </aside>
       </div>
+      </>)}
+      <TaskDetailSheet taskId={detail} onOpenChange={(v) => !v && setDetail(null)} anggotaMap={anggotaMap} />
     </div>
   );
 }

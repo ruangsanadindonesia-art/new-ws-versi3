@@ -145,6 +145,89 @@ def build_monitoring_router(db: AsyncIOMotorDatabase, get_current_user, user_sco
         return {"items": items, "summary": summary, "per_tim": tim_rows, "per_orang": orang_rows,
                 "is_spv": g["is_spv"], "divisi_id": divisi_id, "dihitung_at": now.isoformat()}
 
+    @router.get("/amaliyah")
+    async def amaliyah_kontrol(days: int = 7, divisi_id: Optional[str] = None, user: dict = Depends(get_current_user)):
+        """Pemenuhan amaliyah per orang/tim/item untuk N hari terakhir (termasuk hari ini).
+        Hari uzur (haid) mengurangi target item bertanda gugur_haid. Hanya persentase, bukan isi harian."""
+        g = await _guard(user, divisi_id)
+        if not g["is_spv"]:
+            divisi_id = g["divisi"]
+        days = max(1, min(days, 90))
+        end_d = datetime.now(WIB).date()
+        start_d = end_d - timedelta(days=days - 1)
+        tgl = [(start_d + timedelta(days=i)).isoformat() for i in range(days)]
+        items = await db.amaliyah_items.find({"aktif": {"$ne": False}}, {"_id": 0, "id": 1, "nama": 1, "target_metrik": 1, "gugur_haid": 1}).sort("urutan", 1).to_list(200)
+        if not items:
+            return {"days": days, "orang": [], "tim": [], "item": [], "ringkasan": None}
+
+        def per_item_target(metrik: str, n: int) -> int:
+            m = (metrik or "").lower()
+            if n <= 0:
+                return 0
+            if "minggu" in m or "pekan" in m:
+                return max(1, -(-n // 7))
+            if "bulan" in m:
+                return max(1, -(-n // 30))
+            return n
+
+        anggota = await db.anggota.find({}, {"_id": 0, "id": 1, "nama": 1, "divisi_id": 1, "warna": 1}).to_list(1000)
+        amap = {a["id"]: a for a in anggota}
+        divisi = await db.divisi.find({}, {"_id": 0, "id": 1, "nama": 1}).sort("urutan", 1).to_list(200)
+        dmap = {d["id"]: d["nama"] for d in divisi}
+        users = await db.users.find({"anggota_id": {"$nin": [None, ""]}, "status": "approved"}, {"_id": 0, "user_id": 1, "anggota_id": 1}).to_list(1000)
+        if divisi_id:
+            users = [u for u in users if (amap.get(u["anggota_id"]) or {}).get("divisi_id") == divisi_id]
+        u2a = {u["user_id"]: u["anggota_id"] for u in users}
+        uids = list(u2a)
+        rows = await db.amaliyah_entries.find({"user_id": {"$in": uids or ["_"]}, "checked": True, "tanggal": {"$gte": tgl[0], "$lte": tgl[-1]}},
+                                              {"_id": 0, "user_id": 1, "item_id": 1, "tanggal": 1}).to_list(200000)
+        uz = await db.amaliyah_uzur.find({"user_id": {"$in": uids or ["_"]}, "tanggal": {"$gte": tgl[0], "$lte": tgl[-1]}}, {"_id": 0, "user_id": 1, "tanggal": 1}).to_list(20000)
+        uzur = {(u2a[r["user_id"]], r["tanggal"]) for r in uz if r["user_id"] in u2a}
+        gugur = {i["id"] for i in items if i.get("gugur_haid")}
+        done = {(u2a[r["user_id"]], r["item_id"], r["tanggal"]) for r in rows if r["user_id"] in u2a}
+        done = {x for x in done if not (x[1] in gugur and (x[0], x[2]) in uzur)}
+        last = {}
+        all_rows = await db.amaliyah_entries.find({"user_id": {"$in": uids or ["_"]}, "checked": True}, {"_id": 0, "user_id": 1, "tanggal": 1}).sort("tanggal", -1).to_list(50000)
+        for r in all_rows:
+            a = u2a.get(r["user_id"])
+            if a and a not in last:
+                last[a] = r["tanggal"]
+        orang, item_acc = [], {i["id"]: [0, 0] for i in items}
+        for a_id in sorted(set(u2a.values()), key=lambda x: (amap.get(x) or {}).get("nama", "")):
+            n_uz = sum(1 for d in tgl if (a_id, d) in uzur)
+            tgt = got = 0
+            lemah = []
+            for i in items:
+                n = days - n_uz if i["id"] in gugur else days
+                t = per_item_target(i.get("target_metrik"), n)
+                c = min(sum(1 for d in tgl if (a_id, i["id"], d) in done), t)
+                tgt += t; got += c
+                item_acc[i["id"]][0] += c; item_acc[i["id"]][1] += t
+                if t and c / t < 0.5:
+                    lemah.append(i["nama"])
+            terakhir = last.get(a_id)
+            diam = (end_d - datetime.fromisoformat(terakhir).date()).days if terakhir else None
+            a = amap.get(a_id) or {}
+            orang.append({"id": a_id, "nama": a.get("nama", "-"), "warna": a.get("warna"), "tim_id": a.get("divisi_id"),
+                          "tim_nama": dmap.get(a.get("divisi_id"), "-"), "pct": round(got / tgt * 100) if tgt else None,
+                          "checkin": got, "target": tgt, "terakhir": terakhir, "diam_hari": diam, "item_lemah": lemah[:3]})
+        orang.sort(key=lambda o: (o["pct"] if o["pct"] is not None else -1))
+        tim = {}
+        for o in orang:
+            t = tim.setdefault(o["tim_id"], {"id": o["tim_id"], "nama": o["tim_nama"], "checkin": 0, "target": 0, "orang": 0, "perlu_perhatian": 0})
+            t["checkin"] += o["checkin"]; t["target"] += o["target"]; t["orang"] += 1
+            t["perlu_perhatian"] += 1 if (o["pct"] or 0) < 50 or (o["diam_hari"] is None or o["diam_hari"] >= 3) else 0
+        tim_rows = [{**t, "pct": round(t["checkin"] / t["target"] * 100) if t["target"] else None} for t in tim.values()]
+        tim_rows.sort(key=lambda t: (t["pct"] if t["pct"] is not None else -1))
+        item_rows = [{"id": i["id"], "nama": i["nama"], "gugur_haid": bool(i.get("gugur_haid")),
+                      "pct": round(item_acc[i["id"]][0] / item_acc[i["id"]][1] * 100) if item_acc[i["id"]][1] else None} for i in items]
+        item_rows.sort(key=lambda x: (x["pct"] if x["pct"] is not None else -1))
+        tot_t = sum(o["target"] for o in orang); tot_c = sum(o["checkin"] for o in orang)
+        return {"days": days, "start": tgl[0], "end": tgl[-1], "orang": orang, "tim": tim_rows, "item": item_rows,
+                "ringkasan": {"pct": round(tot_c / tot_t * 100) if tot_t else None, "orang": len(orang),
+                              "diam_3": sum(1 for o in orang if o["diam_hari"] is None or o["diam_hari"] >= 3),
+                              "di_bawah_50": sum(1 for o in orang if (o["pct"] or 0) < 50)}}
+
     @router.get("/deadline-radar")
     async def deadline_radar(divisi_id: Optional[str] = None, user: dict = Depends(get_current_user)):
         g = await _guard(user, divisi_id)

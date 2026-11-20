@@ -356,7 +356,7 @@ const KIND_META = {
   pindah: { label: "pemindahan R", cls: "text-amber-700" },
 };
 
-function ActivityPanel({ taskId, canComment = true }) {
+export function ActivityPanel({ taskId, canComment = true, onSent }) {
   const [items, setItems] = useState([]);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(true);
@@ -365,13 +365,13 @@ function ActivityPanel({ taskId, canComment = true }) {
   useEffect(() => { setLoading(true); load(); /* eslint-disable-next-line */ }, [taskId]);
   const send = async () => {
     if (!text.trim()) return;
-    try { await taskAddComment(taskId, text.trim()); setText(""); load(); }
+    try { await taskAddComment(taskId, text.trim()); setText(""); load(); onSent?.(); }
     catch (e) { toast.error(formatApiErr(e) || "Gagal mengirim komentar"); }
   };
   return (
     <div className="rounded-lg border border-emerald-200 bg-white p-3" data-testid="task-activity">
       <p className="mb-2 flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-emerald-800"><History size={13} /> Komentar &amp; Riwayat Aktivitas</p>
-      <div className="max-h-52 space-y-2 overflow-y-auto pr-1">
+      <div className="max-h-[45vh] space-y-2 overflow-y-auto pr-1">
         {loading ? <p className="text-xs text-emerald-800/50">Memuat…</p> :
           err ? <p className="text-xs italic text-red-600">{err}</p> :
           items.length === 0 ? <p className="text-xs italic text-emerald-800/50">Belum ada aktivitas.</p> :

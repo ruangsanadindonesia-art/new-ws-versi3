@@ -250,3 +250,5 @@ export const mediaUpload = (form) => api.post("/media/file", form, { headers: { 
 export const mediaUpdate = (id, p) => api.put(`/media/${id}`, p).then((r) => r.data);
 export const mediaDelete = (id) => api.delete(`/media/${id}`).then((r) => r.data);
 export const mediaFileUrl = (id) => `${API}/media/${id}/unduh`;
+export const getTask = (id) => api.get(`/tasks/${id}`).then((r) => r.data);
+export const monitoringAmaliyah = (params) => api.get("/monitoring/amaliyah", { params }).then((r) => r.data);

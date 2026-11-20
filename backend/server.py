@@ -1240,8 +1240,10 @@ async def notifications_feed(user: dict = Depends(get_current_user)):
         me = scope["anggota_id"]
         seen2 = await db.user_task_seen.find_one({"user_id": scope["user_id"]}, {"_id": 0}) or {}
         since = seen2.get("last_seen_at") or (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        # Tugas yang pernah saya komentari (mis. SPV/kepala tim yang menanyakan kendala) ikut memberi notifikasi balasan.
+        ikut = await db.task_activity.distinct("task_id", {"user_id": scope["user_id"], "kind": "comment"})
         my_tasks = await db.tasks.find(
-            {"archived": {"$ne": True}, "$or": [{"pemberi_id": me}, {"penerima_tugas_id": me}, {"consulted_ids": me}, {"informed_ids": me}]},
+            {"archived": {"$ne": True}, "$or": [{"pemberi_id": me}, {"penerima_tugas_id": me}, {"consulted_ids": me}, {"informed_ids": me}, {"id": {"$in": ikut}}]},
             {"_id": 0, "id": 1, "nama": 1, "pemberi_id": 1, "penerima_tugas_id": 1, "consulted_ids": 1, "informed_ids": 1}).to_list(500)
         tmap = {t["id"]: t for t in my_tasks}
         if tmap:
@@ -1252,6 +1254,10 @@ async def notifications_feed(user: dict = Depends(get_current_user)):
             for a in acts:
                 t = tmap[a["task_id"]]
                 roles = _raci_roles(t, me)
+                if not roles:  # peserta diskusi (bukan RACI): hanya kabar komentar
+                    if a["kind"] != "comment":
+                        continue
+                    roles = {"C"}
                 if roles == {"R"} and a["kind"] not in ("approve", "revisi", "comment", "pindah"):
                     continue  # R cukup diberi kabar saat disetujui / diminta revisi / dikomentari
                 if a["kind"] == "comment" and not roles & {"A", "C", "R"}:
