@@ -32,6 +32,36 @@ export function PrioritasBadge({ p }) {
   return <span className={`inline-block rounded border px-1.5 py-px text-[10px] font-semibold ${PRIORITAS[p].cls}`}>{PRIORITAS[p].label}</span>;
 }
 
+
+// ---------- Deadline helpers ----------
+const ymdLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+function quickDates() {
+  const t = new Date(); const add = (n) => { const d = new Date(t); d.setDate(d.getDate() + n); return ymdLocal(d); };
+  const keJumat = (5 - t.getDay() + 7) % 7 || 7;
+  return [["Hari ini", add(0)], ["Besok", add(1)], ["Jumat", add(keJumat)], ["+1 pekan", add(7)]];
+}
+function jamOptions(cur) {
+  const out = [];
+  for (let h = 6; h <= 22; h++) for (const m of ["00", "30"]) out.push(`${String(h).padStart(2, "0")}:${m}`);
+  if (cur && !out.includes(cur)) out.push(cur);
+  return out.sort();
+}
+function DeadlineInfo({ tanggal, jam }) {
+  if (!tanggal) return <p className="text-[11px] text-emerald-700/60">Belum ada deadline. Tugas tanpa deadline diurutkan paling akhir.</p>;
+  const [y, m, d] = tanggal.split("-").map(Number);
+  const [hh, mm] = (jam || "23:59").split(":").map(Number);
+  const batas = new Date(y, m - 1, d, hh, mm);
+  const hari = Math.round((new Date(y, m - 1, d) - new Date(new Date().toDateString())) / 86400000);
+  const lewat = batas < new Date();
+  const rel = lewat ? "sudah lewat" : hari === 0 ? "hari ini" : hari === 1 ? "besok" : `${hari} hari lagi`;
+  const teks = batas.toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  return (
+    <p className={`text-[11px] ${lewat ? "font-medium text-red-600" : "text-emerald-800/80"}`} data-testid="deadline-info">
+      {teks}{jam ? `, pukul ${jam.replace(":", ".")}` : " (akhir hari)"} · {rel}
+    </p>
+  );
+}
+
 export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editing, lists, labels, anggotaAll, divisiList, isSpv = true, myAnggotaId = null, editingTask = null, onRevisi = null, onKirimReview = null, onSetujui = null, sasaranList = [], canGantiR = true }) {
   const set = (k) => (e) => setForm({ ...form, [k]: e?.target ? e.target.value : e });
   const [revisiNote, setRevisiNote] = useState("");
@@ -144,42 +174,62 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
             {!editing && <p className="mt-2 text-[10px] text-emerald-700/70">R dan A otomatis Anda sendiri. Ganti R untuk langsung menugaskan orang lain. Jika R berbeda dari A, hasil harus disetujui A sebelum Selesai.</p>}
           </div>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {!isRutin && (
+            <div className="space-y-1.5" data-testid="deadline-section">
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-xs font-medium text-emerald-900" htmlFor="tk-deadline">Deadline</label>
+                {form.deadline && canDef && (
+                  <button type="button" onClick={() => setForm({ ...form, deadline: "", deadline_jam: "" })} className="text-[11px] text-emerald-700/70 hover:text-red-600" data-testid="deadline-hapus">Hapus deadline</button>
+                )}
+              </div>
+              {canDef && (
+                <div className="flex flex-wrap gap-1.5">
+                  {quickDates().map(([l, v]) => (
+                    <button key={l} type="button" onClick={() => setForm({ ...form, deadline: v })} data-testid={`deadline-cepat-${l}`}
+                      className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${form.deadline === v ? "border-emerald-800 bg-emerald-800 text-white" : "border-emerald-200 bg-white text-emerald-900 hover:bg-emerald-50"}`}>{l}</button>
+                  ))}
+                </div>
+              )}
+              <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                <Input id="tk-deadline" type="date" value={form.deadline || ""} onChange={set("deadline")} data-testid="input-deadline" disabled={!canDef} className="h-10 bg-white" />
+                <select value={form.deadline_jam || ""} onChange={set("deadline_jam")} disabled={!canDef || !form.deadline} data-testid="input-deadline-jam" aria-label="Jam deadline"
+                  className="h-10 w-[7.5rem] rounded-md border border-input bg-white px-2 text-sm text-emerald-950 shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50">
+                  <option value="">Tanpa jam</option>
+                  {jamOptions(form.deadline_jam).map((j) => <option key={j} value={j}>{j}</option>)}
+                </select>
+              </div>
+              <DeadlineInfo tanggal={form.deadline} jam={form.deadline_jam} />
+            </div>
+          )}
+          <div className={`grid grid-cols-1 gap-3 ${editing && !isRutin ? "sm:grid-cols-2" : ""}`}>
             {!isRutin && (
               <div>
-                <label className="text-xs font-medium text-emerald-900">Deadline <span className="font-normal text-emerald-700/50">(jam opsional)</span></label>
-                <div className="flex gap-1.5">
-                  <Input type="date" value={form.deadline || ""} onChange={set("deadline")} data-testid="input-deadline" disabled={!canDef} className="min-w-0 flex-1" />
-                  <Input type="time" value={form.deadline_jam || ""} onChange={set("deadline_jam")} data-testid="input-deadline-jam" disabled={!canDef || !form.deadline} className="w-[8.5rem] shrink-0" />
+                <label className="text-xs font-medium text-emerald-900">Prioritas</label>
+                <div className="mt-1 grid grid-cols-4 overflow-hidden rounded-md border border-emerald-200" data-testid="prioritas-pilih" role="radiogroup" aria-label="Prioritas">
+                  {[["", "Tanpa"], ...Object.entries(PRIORITAS).map(([k, v]) => [k, v.label])].map(([k, l], i) => {
+                    const on = (form.prioritas || "") === k;
+                    return (
+                      <button key={k || "none"} type="button" role="radio" aria-checked={on} disabled={!canDef} onClick={() => setForm({ ...form, prioritas: k })} data-testid={`prioritas-${k || "none"}`}
+                        className={`h-10 text-xs font-medium transition disabled:opacity-60 ${i ? "border-l border-emerald-200" : ""} ${on ? (PRIORITAS[k]?.on || "bg-emerald-800 text-white") : "bg-white text-emerald-900 hover:bg-emerald-50"}`}>{l}</button>
+                    );
+                  })}
                 </div>
               </div>
             )}
             {editing && (
               <div>
                 <label className="text-xs font-medium text-emerald-900">Status</label>
-                <Select value={form.status} onValueChange={set("status")} disabled={!canWork}>
-                  <SelectTrigger data-testid="select-status"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {statusOptions.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <div className="mt-1">
+                  <Select value={form.status} onValueChange={set("status")} disabled={!canWork}>
+                    <SelectTrigger data-testid="select-status" className="h-10"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {statusOptions.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
             )}
           </div>
-          {!isRutin && (
-            <div>
-              <label className="text-xs font-medium text-emerald-900">Prioritas</label>
-              <div className="mt-1 flex flex-wrap gap-1.5" data-testid="prioritas-pilih">
-                {[["", "Tanpa"], ...Object.entries(PRIORITAS).map(([k, v]) => [k, v.label])].map(([k, l]) => {
-                  const on = (form.prioritas || "") === k;
-                  return (
-                    <button key={k || "none"} type="button" disabled={!canDef} onClick={() => setForm({ ...form, prioritas: k })} data-testid={`prioritas-${k || "none"}`}
-                      className={`rounded-md border px-3 py-1 text-xs font-medium disabled:opacity-60 ${on ? (PRIORITAS[k]?.on || "border-emerald-800 bg-emerald-800 text-white") : "border-emerald-200 bg-white text-emerald-900 hover:bg-emerald-50"}`}>{l}</button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
           <div>
             <label className="text-xs font-medium text-emerald-900">Instruksi <span className="text-emerald-700/50">(dari A)</span></label>
             <Textarea rows={2} value={form.catatan_tim || ""} onChange={set("catatan_tim")} placeholder="Apa yang perlu dikerjakan, standar hasil, catatan penting…" disabled={!canDef} data-testid="input-instruksi" />
