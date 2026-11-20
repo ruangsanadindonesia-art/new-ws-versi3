@@ -64,6 +64,7 @@ class UpdateUserPayload(BaseModel):
 
 class UpdateProfilePayload(BaseModel):
     name: Optional[str] = None
+    jenis_kelamin: Optional[str] = None  # L | P — dipakai untuk fitur uzur (haid) amaliyah
     email: Optional[EmailStr] = None
     current_password: Optional[str] = None
     new_password: Optional[str] = Field(default=None, min_length=6)
@@ -562,6 +563,10 @@ def build_auth_router(db: AsyncIOMotorDatabase) -> APIRouter:
         upd = {}
         if payload.name is not None and payload.name.strip():
             upd["name"] = payload.name.strip()
+        if payload.jenis_kelamin is not None:
+            if payload.jenis_kelamin not in ("L", "P", ""):
+                raise HTTPException(400, "Jenis kelamin harus L atau P.")
+            upd["jenis_kelamin"] = payload.jenis_kelamin or None
         if payload.email is not None:
             email = payload.email.lower()
             existing = await db.users.find_one({"email": email})

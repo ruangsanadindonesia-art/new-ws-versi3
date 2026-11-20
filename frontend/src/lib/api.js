@@ -236,3 +236,17 @@ export const rapatKomitmen = (id, p) => api.post(`/ritme/rapat/${id}/komitmen`, 
 export const rapatSelesai = (id, p) => api.post(`/ritme/rapat/${id}/selesai`, p).then((r) => r.data);
 export const isuTambah = (p) => api.post("/ritme/isu", p).then((r) => r.data);
 export const isuUbah = (id, p, rapat_id) => api.put(`/ritme/isu/${id}`, p, { params: rapat_id ? { rapat_id } : {} }).then((r) => r.data);
+// Pengajuan ganti penanggung jawab (R) — disetujui kepala tim
+export const ajukanPindah = (id, p) => api.post(`/tasks/${id}/pindah/ajukan`, p).then((r) => r.data);
+export const putuskanPindah = (id, p) => api.post(`/tasks/${id}/pindah/putuskan`, p).then((r) => r.data);
+export const pindahMenunggu = () => api.get("/tasks/pindah/menunggu").then((r) => r.data);
+// Uzur (haid) amaliyah — pribadi
+export const listUzur = (start, end) => api.get("/amaliyah/uzur", { params: { start, end } }).then((r) => r.data);
+export const setUzur = (tanggal, uzur) => api.put("/amaliyah/uzur", { tanggal, uzur }).then((r) => r.data);
+// Media tim
+export const mediaList = (params = {}) => api.get("/media", { params }).then((r) => r.data);
+export const mediaAddLink = (p) => api.post("/media/link", p).then((r) => r.data);
+export const mediaUpload = (form) => api.post("/media/file", form, { headers: { "Content-Type": "multipart/form-data" } }).then((r) => r.data);
+export const mediaUpdate = (id, p) => api.put(`/media/${id}`, p).then((r) => r.data);
+export const mediaDelete = (id) => api.delete(`/media/${id}`).then((r) => r.data);
+export const mediaFileUrl = (id) => `${API}/media/${id}/unduh`;

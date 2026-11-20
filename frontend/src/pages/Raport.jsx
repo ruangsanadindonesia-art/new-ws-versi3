@@ -232,12 +232,13 @@ export default function Raport() {
           <div className="mt-3 h-2 overflow-hidden rounded-full bg-emerald-100">
             <div className="h-full rounded-full bg-emerald-600" style={{ width: `${t.score}%` }} />
           </div>
-          <ul className="mt-4 grid grid-cols-2 gap-2 text-xs">
-            <li className="rounded bg-emerald-50 p-2"><span className="font-semibold text-emerald-900">{t.selesai}</span> Selesai</li>
-            <li className="rounded bg-amber-50 p-2"><span className="font-semibold text-amber-900">{t.dalam_proses}</span> Proses</li>
-            <li className="rounded bg-red-50 p-2"><span className="font-semibold text-red-900">{t.terkendala}</span> Terkendala</li>
-            <li className="rounded bg-slate-50 p-2"><span className="font-semibold text-slate-800">{t.overdue}</span> Overdue</li>
+          <ul className="mt-4 grid grid-cols-2 gap-2 text-xs" data-testid="task-breakdown">
+            <li className="rounded bg-emerald-50 p-2"><span className="font-semibold text-emerald-900">{t.tepat_waktu ?? t.selesai}</span> Selesai tepat waktu <span className="text-emerald-800/50">(nilai 100)</span></li>
+            <li className="rounded bg-amber-50 p-2"><span className="font-semibold text-amber-900">{t.terlambat ?? 0}</span> Selesai terlambat <span className="text-amber-800/60">(nilai 50)</span></li>
+            <li className="rounded bg-red-50 p-2"><span className="font-semibold text-red-900">{t.overdue}</span> Lewat deadline, belum selesai <span className="text-red-800/60">(nilai 0)</span></li>
+            <li className="rounded bg-slate-50 p-2"><span className="font-semibold text-slate-800">{t.belum_jatuh_tempo ?? 0}</span> Belum jatuh tempo <span className="text-slate-600/70">(belum dinilai)</span></li>
           </ul>
+          <p className="mt-2 text-[11px] text-emerald-800/60">Skor = rata-rata nilai {t.dinilai ?? 0} tugas yang sudah bisa dinilai. Terkendala: {t.terkendala}.</p>
         </div>
 
         <div className="rounded-xl border border-emerald-100 bg-white p-6">
@@ -252,6 +253,7 @@ export default function Raport() {
             <span className="font-semibold text-emerald-900">{a.total_entries}</span> check-in tercatat dari target{" "}
             <span className="font-semibold text-emerald-900">{a.target}</span> ({a.items_count} amaliyah × {a.days} hari{a.peserta > 1 ? ` × ${a.peserta} orang` : ""})
           </p>
+          {a.hari_uzur > 0 && <p className="mt-1 text-[11px] text-rose-800/70">{a.hari_uzur} hari berhalangan (haid): item yang gugur tidak masuk target.</p>}
           {isIndividu && a.total_entries === 0 && (
             <p className="mt-2 rounded border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-800">
               Belum ada data amaliyah untuk anggota ini (mungkin belum di-link ke user).

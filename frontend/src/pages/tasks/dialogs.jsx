@@ -14,7 +14,7 @@ import {
   createTaskLabel, updateTaskLabel, deleteTaskLabel,
   createKategori, updateKategori, deleteKategori,
   createAnggota, updateAnggota, deleteAnggota,
-  moveTask, bulkMoveTasks, taskActivity, taskAddComment,
+  moveTask, bulkMoveTasks, taskActivity, taskAddComment, ajukanPindah,
 } from "@/lib/api";
 import { ColorPicker, KATEGORI_LABEL, TIPES } from "./shared";
 import { RACI, RoleTag, raciRoles, PersonSelect, PeopleSelect, RaciLegend } from "./raci";
@@ -22,7 +22,17 @@ import { RACI, RoleTag, raciRoles, PersonSelect, PeopleSelect, RaciLegend } from
 const STATUS_LABELS = { BELUM_MULAI: "Belum Mulai", DALAM_PROSES: "Dalam Proses", MENUNGGU_REVIEW: "Menunggu review", REVISI: "Revisi", TERKENDALA: "Terkendala", SELESAI: "Selesai" };
 
 // ============ TASK DIALOG ============
-export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editing, lists, labels, anggotaAll, divisiList, isSpv = true, myAnggotaId = null, editingTask = null, onRevisi = null, onKirimReview = null, onSetujui = null, sasaranList = [] }) {
+export const PRIORITAS = {
+  TINGGI: { label: "Tinggi", cls: "bg-red-100 text-red-700 border-red-200", on: "bg-red-600 text-white border-red-600" },
+  SEDANG: { label: "Sedang", cls: "bg-amber-100 text-amber-800 border-amber-200", on: "bg-amber-500 text-white border-amber-500" },
+  RENDAH: { label: "Rendah", cls: "bg-slate-100 text-slate-600 border-slate-200", on: "bg-slate-500 text-white border-slate-500" },
+};
+export function PrioritasBadge({ p }) {
+  if (!PRIORITAS[p]) return null;
+  return <span className={`inline-block rounded border px-1.5 py-px text-[10px] font-semibold ${PRIORITAS[p].cls}`}>{PRIORITAS[p].label}</span>;
+}
+
+export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editing, lists, labels, anggotaAll, divisiList, isSpv = true, myAnggotaId = null, editingTask = null, onRevisi = null, onKirimReview = null, onSetujui = null, sasaranList = [], canGantiR = true }) {
   const set = (k) => (e) => setForm({ ...form, [k]: e?.target ? e.target.value : e });
   const [revisiNote, setRevisiNote] = useState("");
   const [showDetail, setShowDetail] = useState(false);
@@ -46,6 +56,8 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
   const canRevisi = editing && onRevisi && (isSpv || isA) && status !== "SELESAI";
   const canSubmitReview = editing && (isSpv || isR) && needsReview && !["MENUNGGU_REVIEW", "SELESAI"].includes(status) && !isA;
   const raciExclude = [form.penerima_tugas_id, form.pemberi_id].filter(Boolean);
+  const rBerubahPerluIzin = editing && !canGantiR && form.penerima_tugas_id !== editingTask?.penerima_tugas_id;
+  const pengajuan = editingTask?.pengajuan_pindah;
   // R pada tugas yang wajib review tidak memilih "Selesai" sendiri — pakai tombol Kirim untuk review.
   const statusOptions = Object.entries(STATUS_LABELS).filter(([v]) =>
     v === form.status || isSpv || (v !== "MENUNGGU_REVIEW" && !(v === "SELESAI" && needsReview && !isA)));
@@ -117,14 +129,29 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
                   anggotaAll={anggotaAll} divisiList={divisiList} exclude={[...raciExclude, ...(form.consulted_ids || [])]} disabled={!canDef} testId="select-raci-i" />
               </div>
             </div>
+            {pengajuan && (
+              <p className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-[11px] text-amber-900" data-testid="pindah-pending">
+                Menunggu persetujuan kepala tim: pindah ke <b>{pengajuan.ke_nama}</b> (diajukan {pengajuan.oleh_nama}: “{pengajuan.alasan}”).
+              </p>
+            )}
+            {rBerubahPerluIzin && (
+              <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-2" data-testid="pindah-alasan-box">
+                <p className="text-[11px] text-amber-900">Mengganti yang mengerjakan (R) perlu <b>persetujuan kepala tim</b>. R tetap sampai disetujui.</p>
+                <Textarea rows={2} value={form._alasan_pindah || ""} onChange={(e) => setForm({ ...form, _alasan_pindah: e.target.value })}
+                  placeholder="Alasan pemindahan (wajib), mis. beban kerja penuh pekan ini" className="mt-1 bg-white text-xs" data-testid="pindah-alasan" />
+              </div>
+            )}
             {!editing && <p className="mt-2 text-[10px] text-emerald-700/70">R dan A otomatis Anda sendiri. Ganti R untuk langsung menugaskan orang lain. Jika R berbeda dari A, hasil harus disetujui A sebelum Selesai.</p>}
           </div>
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {!isRutin && (
               <div>
-                <label className="text-xs font-medium text-emerald-900">Deadline</label>
-                <Input type="date" value={form.deadline || ""} onChange={set("deadline")} data-testid="input-deadline" disabled={!canDef} />
+                <label className="text-xs font-medium text-emerald-900">Deadline <span className="font-normal text-emerald-700/50">(jam opsional)</span></label>
+                <div className="flex gap-1.5">
+                  <Input type="date" value={form.deadline || ""} onChange={set("deadline")} data-testid="input-deadline" disabled={!canDef} className="min-w-0 flex-1" />
+                  <Input type="time" value={form.deadline_jam || ""} onChange={set("deadline_jam")} data-testid="input-deadline-jam" disabled={!canDef || !form.deadline} className="w-[8.5rem] shrink-0" />
+                </div>
               </div>
             )}
             {editing && (
@@ -139,6 +166,20 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
               </div>
             )}
           </div>
+          {!isRutin && (
+            <div>
+              <label className="text-xs font-medium text-emerald-900">Prioritas</label>
+              <div className="mt-1 flex flex-wrap gap-1.5" data-testid="prioritas-pilih">
+                {[["", "Tanpa"], ...Object.entries(PRIORITAS).map(([k, v]) => [k, v.label])].map(([k, l]) => {
+                  const on = (form.prioritas || "") === k;
+                  return (
+                    <button key={k || "none"} type="button" disabled={!canDef} onClick={() => setForm({ ...form, prioritas: k })} data-testid={`prioritas-${k || "none"}`}
+                      className={`rounded-md border px-3 py-1 text-xs font-medium disabled:opacity-60 ${on ? (PRIORITAS[k]?.on || "border-emerald-800 bg-emerald-800 text-white") : "border-emerald-200 bg-white text-emerald-900 hover:bg-emerald-50"}`}>{l}</button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           <div>
             <label className="text-xs font-medium text-emerald-900">Instruksi <span className="text-emerald-700/50">(dari A)</span></label>
             <Textarea rows={2} value={form.catatan_tim || ""} onChange={set("catatan_tim")} placeholder="Apa yang perlu dikerjakan, standar hasil, catatan penting…" disabled={!canDef} data-testid="input-instruksi" />
@@ -280,6 +321,7 @@ const KIND_META = {
   comment: { label: "berkomentar", cls: "text-emerald-900" },
   raci: { label: "mengatur peran RACI", cls: "text-sky-700" },
   hasil: { label: "memperbarui hasil", cls: "text-emerald-700" },
+  pindah: { label: "pemindahan R", cls: "text-amber-700" },
 };
 
 function ActivityPanel({ taskId, canComment = true }) {
@@ -325,7 +367,8 @@ function ActivityPanel({ taskId, canComment = true }) {
 }
 
 // ============ MOVE TASK DIALOG (single) ============
-export function MoveTaskDialog({ open, onOpenChange, task, divisiList, allListsMap, refreshLists, onMoved, anggotaAll = [] }) {
+export function MoveTaskDialog({ open, onOpenChange, task, divisiList, allListsMap, refreshLists, onMoved, anggotaAll = [], canGantiR = true }) {
+  const [alasan, setAlasan] = useState("");
   const [targetDivisi, setTargetDivisi] = useState("");
   const [targetList, setTargetList] = useState("");
   const [targetPenerima, setTargetPenerima] = useState("keep");
@@ -338,6 +381,7 @@ export function MoveTaskDialog({ open, onOpenChange, task, divisiList, allListsM
       setTargetDivisi(task.divisi_id || "");
       setTargetList("");
       setTargetPenerima("keep");
+      setAlasan("");
       setPosisi(1);
       setShowNewList(false);
     }
@@ -364,6 +408,12 @@ export function MoveTaskDialog({ open, onOpenChange, task, divisiList, allListsM
         list_id: targetList || null,
         urutan: Math.max(1, parseInt(posisi, 10) || 1),
       };
+      if (targetPenerima && targetPenerima !== "keep" && !canGantiR) {
+        if (alasan.trim().length < 3) return toast.error("Tulis alasan pemindahan untuk kepala tim");
+        await ajukanPindah(task.id, { penerima_id: targetPenerima, alasan: alasan.trim() });
+        toast.success("Pengajuan pemindahan dikirim ke kepala tim");
+        onOpenChange(false); onMoved(); return;
+      }
       if (targetPenerima && targetPenerima !== "keep") payload.penerima_tugas_id = targetPenerima;
       await moveTask(task.id, payload);
       const penerimaBaru = targetPenerima !== "keep" ? anggotaAll.find((a) => a.id === targetPenerima) : null;
@@ -416,6 +466,10 @@ export function MoveTaskDialog({ open, onOpenChange, task, divisiList, allListsM
                 })}
               </SelectContent>
             </Select>
+            {!canGantiR && targetPenerima !== "keep" && (
+              <Textarea rows={2} value={alasan} onChange={(e) => setAlasan(e.target.value)} className="mt-2 text-xs" data-testid="move-alasan"
+                placeholder="Alasan pemindahan (wajib) — akan disetujui kepala tim" />
+            )}
             <p className="mt-1 text-[10px] text-emerald-700/60">
               Bisa pindah ke <b>perorangan lintas divisi</b> — tugas tetap tampil di workspace Anda sebagai monitor.
             </p>

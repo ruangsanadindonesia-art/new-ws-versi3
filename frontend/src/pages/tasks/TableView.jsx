@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { TIPES } from "./shared";
 import { RoleTag, raciRoles, PersonSelect, PeopleSelect, RaciLegend } from "./raci";
+import { PrioritasBadge } from "./dialogs";
 import { reorderTasks, createTaskList, updateTaskList, deleteTaskList, createTaskLabel, updateTaskLabel, deleteTaskLabel } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -179,8 +180,10 @@ function Row({ task, idx, lists, labels, labelMap, listMap, anggotaAll, anggotaM
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
             <button onClick={() => onEdit(task)} className="block w-full truncate text-left font-medium text-emerald-950 hover:text-emerald-700 hover:underline" data-testid={`row-nama-${task.id}`}>{task.nama}</button>
-            {(isMoved || myRoles.length > 0 || task.brief_link || task.status === "REVISI") && (
+            {(isMoved || myRoles.length > 0 || task.brief_link || task.status === "REVISI" || task.prioritas || task.pengajuan_pindah) && (
               <div className="mt-1 flex flex-wrap items-center gap-1">
+                <PrioritasBadge p={task.prioritas} />
+                {task.pengajuan_pindah && <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-800" title={`Diajukan pindah ke ${task.pengajuan_pindah.ke_nama}`}>PINDAH?</span>}
                 {isMoved && <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[9px] font-bold text-red-700">BARU</span>}
                 {task.status === "REVISI" && (
                   <span className="rounded-full bg-red-600 px-1.5 py-0.5 text-[9px] font-bold text-white" data-testid={`row-revisi-${task.id}`}
@@ -266,6 +269,12 @@ function Row({ task, idx, lists, labels, labelMap, listMap, anggotaAll, anggotaM
           onBlur={(e) => e.target.value !== (task.deadline || "") && onSaveCell(task.id, { deadline: e.target.value || null })}
           className="w-full rounded border-transparent bg-transparent px-2 py-1 text-xs text-emerald-900 hover:border-emerald-200 focus:border-emerald-400 focus:outline-none"
           data-testid={`row-deadline-${task.id}`} />
+        {task.deadline && (
+          <input type="time" defaultValue={task.deadline_jam || ""} disabled={!canDef} key={`${task.id}-${task.deadline_jam || ""}`}
+            onBlur={(e) => e.target.value !== (task.deadline_jam || "") && onSaveCell(task.id, { deadline_jam: e.target.value || "" })}
+            className="w-full rounded border-transparent bg-transparent px-2 py-0.5 text-[11px] text-emerald-800/80 hover:border-emerald-200 focus:border-emerald-400 focus:outline-none"
+            data-testid={`row-deadline-jam-${task.id}`} />
+        )}
       </td>
       <td className="max-w-[220px] p-2" data-testid={`row-hasil-${task.id}`}>
         {task.hasil_link ? (

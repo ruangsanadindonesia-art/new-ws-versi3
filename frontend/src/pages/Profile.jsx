@@ -9,6 +9,7 @@ import { updateProfile, listApiKeys, createApiKey, revokeApiKey } from "@/lib/ap
 export default function Profile() {
   const { user, refreshUser } = useAuth();
   const [name, setName] = useState(user?.name || "");
+  const [jk, setJk] = useState(user?.jenis_kelamin || "");
   const [email, setEmail] = useState(user?.email || "");
   const [curPass, setCurPass] = useState("");
   const [newPass, setNewPass] = useState("");
@@ -38,6 +39,7 @@ export default function Profile() {
     if (newPass && newPass.length < 6) return toast.error("Password baru minimal 6 karakter");
     const payload = {};
     if (name.trim() && name.trim() !== user?.name) payload.name = name.trim();
+    if (jk !== (user?.jenis_kelamin || "")) payload.jenis_kelamin = jk;
     if (email.trim() && email.trim().toLowerCase() !== user?.email) payload.email = email.trim().toLowerCase();
     if (newPass) { payload.current_password = curPass; payload.new_password = newPass; }
     if (Object.keys(payload).length === 0) return toast.error("Tidak ada perubahan");
@@ -110,6 +112,15 @@ export default function Profile() {
             <div>
               <label className="text-xs font-medium text-emerald-900">Nama Lengkap</label>
               <Input data-testid="profile-name" value={name} onChange={(e) => setName(e.target.value)} required />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-emerald-900" htmlFor="profile-jk">Jenis kelamin</label>
+              <select id="profile-jk" data-testid="profile-jk" value={jk} onChange={(e) => setJk(e.target.value)} className="h-9 w-full rounded-md border border-input bg-white px-2 text-sm">
+                <option value="">— Belum diisi —</option>
+                <option value="L">Ikhwan (laki-laki)</option>
+                <option value="P">Akhwat (perempuan)</option>
+              </select>
+              <p className="mt-1 text-[10px] text-emerald-700/60">Akhwat bisa menandai hari berhalangan (haid) di Amaliyah agar tidak mengurangi skor.</p>
             </div>
             <div>
               <label className="text-xs font-medium text-emerald-900">Email</label>

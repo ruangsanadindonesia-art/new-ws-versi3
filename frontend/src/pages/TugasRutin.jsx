@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Link } from "react-router-dom";
 import { listTasks, listTodoEntries, upsertTodoEntry } from "@/lib/api";
+import { useAuth } from "@/lib/AuthContext";
 
 // ISO week number (Mon-first)
 function isoWeek(d) {
@@ -60,6 +61,7 @@ function weekYear(d) {
 }
 
 export default function TugasRutin() {
+  const { user } = useAuth();
   const [tab, setTab] = useState("HARIAN");
   const [tasks, setTasks] = useState([]);
   const [entries, setEntries] = useState([]);
@@ -72,8 +74,10 @@ export default function TugasRutin() {
 
   useEffect(() => {
     setLoading(true);
-    listTasks({ kategori: tab }).then(setTasks).finally(() => setLoading(false));
-  }, [tab]);
+    // Checklist rutin bersifat pribadi: hanya tugas rutin di mana saya R.
+    listTasks({ kategori: tab }).then((rows) => setTasks(user?.anggota_id ? rows.filter((t) => t.penerima_tugas_id === user.anggota_id) : rows))
+      .finally(() => setLoading(false));
+  }, [tab, user?.anggota_id]);
 
   useEffect(() => {
     let start, end;

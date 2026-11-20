@@ -295,7 +295,7 @@ function AmaliyahRow({ it, idx, days, year, month, entryMap, toggle, updateItem,
   const [nama, setNama] = useState(it.nama);
   const [target, setTarget] = useState(it.target_metrik);
   useEffect(() => { setNama(it.nama); setTarget(it.target_metrik); }, [it.nama, it.target_metrik]);
-  const saveEdit = () => { updateItem(it.id, { nama, target_metrik: target, keterangan: it.keterangan }); setEditing(false); };
+  const saveEdit = () => { updateItem(it.id, { nama, target_metrik: target, keterangan: it.keterangan, gugur_haid: !!it.gugur_haid }); setEditing(false); };
 
   return (
     <tr ref={setNodeRef} style={style} className="group border-t border-emerald-50 hover:bg-emerald-50/30" data-testid={`amaliyah-row-${it.id}`}>
@@ -332,6 +332,13 @@ function AmaliyahRow({ it, idx, days, year, month, entryMap, toggle, updateItem,
               )}
             </div>
             <p className="text-[10px] text-emerald-700/60">{it.target_metrik}</p>
+            {isSpv ? (
+              <label className="mt-0.5 flex items-center gap-1 text-[10px] text-emerald-800/70" title="Pada hari berhalangan (haid), item ini tidak masuk target dan skor">
+                <input type="checkbox" checked={!!it.gugur_haid} data-testid={`gugur-haid-${it.id}`}
+                  onChange={(e) => updateItem(it.id, { nama: it.nama, target_metrik: it.target_metrik, keterangan: it.keterangan, gugur_haid: e.target.checked })} />
+                Gugur saat haid
+              </label>
+            ) : it.gugur_haid ? <p className="text-[10px] text-rose-700/70">Gugur saat haid</p> : null}
           </div>
         )}
       </td>

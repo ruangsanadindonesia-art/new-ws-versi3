@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { createTaskList } from "@/lib/api";
 import { toast } from "sonner";
+import { PrioritasBadge } from "./dialogs";
 
 export default function KanbanBoard({
   lists, tasks, labels, arsipMode, divisiId,
@@ -151,6 +152,7 @@ function Card({ task, labels, anggotaMap, kategoriMap, arsipMode, selected, anyS
             </div>
           )}
           <p className="text-sm font-semibold text-emerald-950">{task.nama}</p>
+          {task.prioritas && <div className="mt-0.5"><PrioritasBadge p={task.prioritas} /></div>}
         </div>
         {onEdit && (
           <div onPointerDown={(e) => e.stopPropagation()}>
@@ -204,7 +206,7 @@ function Card({ task, labels, anggotaMap, kategoriMap, arsipMode, selected, anyS
         {kategori && <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold text-white" style={{ background: kategori.warna }}>{kategori.nama}</span>}
         {task.deadline && (
           <span className="rounded bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-800">
-            <Calendar size={9} className="mr-0.5 inline" />{task.deadline}
+            <Calendar size={9} className="mr-0.5 inline" />{task.deadline}{task.deadline_jam ? ` ${task.deadline_jam}` : ""}
           </span>
         )}
         {anggota && (

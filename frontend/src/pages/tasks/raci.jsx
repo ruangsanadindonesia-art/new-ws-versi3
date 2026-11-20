@@ -52,14 +52,14 @@ export function PersonSelect({ value, onChange, anggotaAll, divisiList, disabled
     ? "w-full rounded px-2 py-1 text-left hover:bg-emerald-50 disabled:cursor-default disabled:hover:bg-transparent"
     : "flex h-9 w-full items-center rounded-md border border-input bg-white px-3 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60";
   return (
-    <Popover open={open && !disabled} onOpenChange={setOpen}>
+    <Popover modal open={open && !disabled} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button type="button" disabled={disabled} className={trigger} data-testid={testId}>
           {cur ? <PersonChip a={cur} /> : <span className="text-xs text-emerald-800/40">{placeholder}</span>}
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-60 p-1" align="start">
-        <div className="max-h-64 overflow-auto">
+        <div className="max-h-64 overflow-auto overscroll-contain">
           {grouped(anggotaAll, divisiList).map(({ d, items }) => (
             <div key={d.id}>
               <p className="mt-1 px-2 text-[9px] font-semibold uppercase text-emerald-800/50">{d.nama}</p>
@@ -86,7 +86,7 @@ export function PeopleSelect({ value = [], onChange, anggotaAll, divisiList, exc
   const toggle = (id) => onChange(value.includes(id) ? value.filter((x) => x !== id) : [...value, id]);
   const chosen = value.map((id) => map[id]).filter(Boolean);
   return (
-    <Popover open={open && !disabled} onOpenChange={setOpen}>
+    <Popover modal open={open && !disabled} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button type="button" disabled={disabled} data-testid={testId}
           className={compact
@@ -100,7 +100,7 @@ export function PeopleSelect({ value = [], onChange, anggotaAll, divisiList, exc
         {chosen.length > 0 && (
           <button type="button" onClick={() => onChange([])} className="flex w-full items-center gap-1 rounded px-2 py-1 text-left text-xs italic text-emerald-700/70 hover:bg-emerald-50"><X size={11} /> Kosongkan</button>
         )}
-        <div className="max-h-64 overflow-auto">
+        <div className="max-h-64 overflow-auto overscroll-contain">
           {grouped(anggotaAll, divisiList, exclude).map(({ d, items }) => (
             <div key={d.id}>
               <p className="mt-1 px-2 text-[9px] font-semibold uppercase text-emerald-800/50">{d.nama}</p>

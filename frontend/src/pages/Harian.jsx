@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Check, HeartHandshake, Repeat, Target } from "lucide-react";
 import { toast } from "sonner";
-import { listAmaliyahItems, listEntries, upsertEntry, listTasks, listTodoEntries, upsertTodoEntry, listAnggota, sasaranOverview } from "@/lib/api";
+import { listAmaliyahItems, listEntries, upsertEntry, listTasks, listTodoEntries, upsertTodoEntry, listAnggota, sasaranOverview, listUzur, setUzur } from "@/lib/api";
 import { Link } from "react-router-dom";
 import { CheckinDialog, fmtAngka, StatusPill } from "@/pages/sasaran/parts";
 import { useAuth } from "@/lib/AuthContext";
@@ -63,9 +63,8 @@ function HariIni({ onOpen }) {
     (async () => {
       try {
         const [it, en, rtAll, ag] = await Promise.all([listAmaliyahItems(), listEntries({ start: today, end: today }), listTasks({ tipe: "RUTIN" }), listAnggota()]);
-        const myDiv = ag.find((a) => a.id === user?.anggota_id)?.divisi_id;
-        // Tugas rutin tim saya atau yang ditugaskan ke saya (SPV tidak melihat rutin semua tim di sini)
-        const rt = rtAll.filter((t) => t.penerima_tugas_id === user?.anggota_id || (myDiv && t.divisi_id === myDiv));
+        // Tugas rutin milik saya saja (R = saya). Tugas rutin orang lain tidak tampil di sini.
+        const rt = rtAll.filter((t) => user?.anggota_id && t.penerima_tugas_id === user.anggota_id);
         setItems(it.filter((x) => x.aktif !== false));
         setAmal(Object.fromEntries(en.filter((e) => e.checked).map((e) => [e.item_id, true])));
         setRutin(rt);
@@ -94,7 +93,17 @@ function HariIni({ onOpen }) {
     catch { setTodo((p) => ({ ...p, [key]: !next })); toast.error("Gagal menyimpan"); }
   };
 
-  const doneAmal = items.filter((i) => amal[i.id]).length;
+  // Uzur (haid): hanya untuk akun akhwat. Item bertanda "gugur saat haid" tidak dihitung hari itu.
+  const isAkhwat = user?.jenis_kelamin === "P";
+  const [uzur, setUzurState] = useState(false);
+  useEffect(() => { if (isAkhwat) listUzur(today, today).then((r) => setUzurState(r.includes(today))).catch(() => {}); }, [isAkhwat, today]);
+  const toggleUzur = async () => {
+    const next = !uzur; setUzurState(next);
+    try { await setUzur(today, next); toast.success(next ? "Ditandai berhalangan hari ini — item yang gugur tidak dihitung" : "Tanda berhalangan dihapus"); }
+    catch (e) { setUzurState(!next); toast.error("Gagal menyimpan"); }
+  };
+  const itemsDihitung = uzur ? items.filter((i) => !i.gugur_haid) : items;
+  const doneAmal = itemsDihitung.filter((i) => amal[i.id]).length;
   const rutinVisible = useMemo(() => rutin.filter((t) => !(t.kategori === "HARIAN" && isSunday)), [rutin, isSunday]);
   const doneRutin = rutinVisible.filter((t) => todo[`${t.id}::${periods[t.kategori]}`]).length;
   const tanggal = now.toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
@@ -132,13 +141,22 @@ function HariIni({ onOpen }) {
       <section className="rounded-xl border border-emerald-100 bg-white">
         <header className="flex items-center justify-between gap-2 border-b border-emerald-50 px-4 py-3">
           <h3 className="flex items-center gap-2 font-display text-base font-semibold text-emerald-950"><HeartHandshake size={16} className="text-emerald-700" /> Amaliyah hari ini</h3>
-          <span className="text-xs font-semibold tabular-nums text-emerald-800">{doneAmal}/{items.length}</span>
+          <span className="text-xs font-semibold tabular-nums text-emerald-800">{doneAmal}/{itemsDihitung.length}</span>
         </header>
+        {isAkhwat && (
+          <label className="flex items-center gap-2 border-b border-emerald-50 bg-rose-50/40 px-4 py-2 text-xs text-rose-900" data-testid="uzur-toggle">
+            <input type="checkbox" checked={uzur} onChange={toggleUzur} />
+            Sedang berhalangan (haid) hari ini <span className="text-rose-800/60">— hanya Anda yang melihat tanggalnya</span>
+          </label>
+        )}
         {items.length === 0 ? <p className="px-4 py-4 text-xs text-emerald-800/60">Belum ada item amaliyah. SPV dapat menambahkannya di tab Amaliyah.</p> : (
           <ul>
-            {items.map((i) => (
+            {itemsDihitung.map((i) => (
               <ChecklistRow key={i.id} checked={!!amal[i.id]} onClick={() => toggleAmal(i.id)} title={i.nama} sub={i.target_metrik} testId={`hari-amal-${i.id}`} />
             ))}
+            {uzur && items.length > itemsDihitung.length && (
+              <li className="px-4 py-2 text-[11px] italic text-rose-800/70">{items.length - itemsDihitung.length} item gugur hari ini (tidak dihitung).</li>
+            )}
           </ul>
         )}
         <button onClick={() => onOpen("amaliyah")} className="w-full border-t border-emerald-50 px-4 py-2 text-left text-xs font-medium text-emerald-700 hover:bg-emerald-50">Lihat rekap bulan ini & streak →</button>

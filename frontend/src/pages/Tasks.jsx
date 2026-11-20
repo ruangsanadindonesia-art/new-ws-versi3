@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useOutletContext } from "react-router-dom";
-import { Plus, Trash2, LayoutGrid, Table as TableIcon, Search, X, Users, Archive, ArchiveRestore, ArrowRightLeft, FileUp, BarChart3, Bookmark, ChevronDown, UserPlus } from "lucide-react";
+import { Plus, Trash2, LayoutGrid, Table as TableIcon, Search, X, Users, Archive, ArchiveRestore, ArrowRightLeft, FileUp, BarChart3, ChevronDown, UserPlus, ArrowUpDown } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,7 @@ import {
   bulkArchiveTasks, bulkUnarchiveTasks,
   listTaskLists, listTaskLabels, listDivisi, listAnggota, markSeenTasks, moveTask,
   importExcel, anggotaAnalytics, revisiTask, submitReview, approveTask, sasaranOverview,
+  ajukanPindah, putuskanPindah, pindahMenunggu,
 } from "@/lib/api";
 import KanbanBoard from "./tasks/KanbanBoard";
 import TableView from "./tasks/TableView";
@@ -23,12 +24,22 @@ import {
 const emptyForm = {
   nama: "", kategori: "PROJECT", status: "BELUM_MULAI",
   penerima_tugas: "", penerima_tugas_id: null, pemberi_id: null, consulted_ids: [], informed_ids: [],
-  tanggal_mulai: "", deadline: "",
+  tanggal_mulai: "", deadline: "", deadline_jam: "", prioritas: "",
   catatan_tim: "", divisi_id: null, list_id: null, label_ids: [],
   brief_link: "", hasil_link: "", hasil_catatan: "",
 };
 
-const PRESET_KEY = "qm_filter_presets_v1";
+const SORT_KEY = "ws_task_sort_v1";
+const PRIO_RANK = { TINGGI: 0, SEDANG: 1, RENDAH: 2 };
+// Kunci urut "Cerdas": selesai di bawah, lalu terlambat, lalu deadline terdekat (tanggal+jam), lalu prioritas, tanpa deadline paling akhir.
+const deadlineKey = (t) => (t.deadline ? `${t.deadline}T${t.deadline_jam || "23:59"}` : "9999");
+const SORTS = {
+  cerdas: { label: "Cerdas (disarankan)", fn: (a, b) => (a.status === "SELESAI") - (b.status === "SELESAI") || deadlineKey(a).localeCompare(deadlineKey(b)) || (PRIO_RANK[a.prioritas] ?? 3) - (PRIO_RANK[b.prioritas] ?? 3) },
+  prioritas: { label: "Prioritas", fn: (a, b) => (a.status === "SELESAI") - (b.status === "SELESAI") || (PRIO_RANK[a.prioritas] ?? 3) - (PRIO_RANK[b.prioritas] ?? 3) || deadlineKey(a).localeCompare(deadlineKey(b)) },
+  deadline: { label: "Deadline terdekat", fn: (a, b) => deadlineKey(a).localeCompare(deadlineKey(b)) },
+  terbaru: { label: "Terbaru dibuat", fn: (a, b) => (b.created_at || "").localeCompare(a.created_at || "") },
+  manual: { label: "Manual (urutan kanban)", fn: null },
+};
 
 export default function Tasks() {
   const outlet = useOutletContext();
@@ -50,9 +61,8 @@ export default function Tasks() {
   const [sasaranList, setSasaranList] = useState([]);
   const [filter, setFilter] = useState({ search: "", list_id: "ALL", label_id: "ALL", penerima_id: "ALL" });
   const [selectedIds, setSelectedIds] = useState([]);
-  const [presets, setPresets] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(PRESET_KEY) || "{}"); } catch { return {}; }
-  });
+  const [sortBy, setSortBy] = useState(() => { try { return localStorage.getItem(SORT_KEY) || "cerdas"; } catch { return "cerdas"; } });
+  const [pindahList, setPindahList] = useState([]);
 
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -67,7 +77,12 @@ export default function Tasks() {
 
   const anggotaMap = useMemo(() => Object.fromEntries(anggotaAll.map((a) => [a.id, a])), [anggotaAll]);
   const myDivisiId = myAnggotaId ? anggotaMap[myAnggotaId]?.divisi_id : null;
-  const visibleDivisi = isSpv ? divisiList : divisiList.filter((d) => d.id === myDivisiId);
+  const headDivisiId = myAnggotaId ? divisiList.find((d) => d.head_anggota_id === myAnggotaId)?.id || null : null;
+  const isHead = !!headDivisiId;
+  const canSeeTim = isSpv || isHead;
+  const visibleDivisi = isSpv ? divisiList : divisiList.filter((d) => d.id === headDivisiId);
+  // Ganti R langsung: SPV, atau kepala tim untuk tugas timnya. Selain itu lewat pengajuan.
+  const canGantiR = (t) => isSpv || (isHead && t && (t.divisi_id === headDivisiId || anggotaMap[t.penerima_tugas_id]?.divisi_id === headDivisiId));
 
   useEffect(() => {
     (async () => {
@@ -75,7 +90,8 @@ export default function Tasks() {
       setDivisiList(d); setLabels(lb); setAnggotaAll(ag);
       sasaranOverview().then((o) => setSasaranList((o.sasaran || []).map((s) => ({ id: s.id, judul: s.judul, tim: s.level === "TIM" ? s.divisi?.nama : "Lembaga" })))).catch(() => {});
       const myAng = user?.anggota_id ? ag.find((a) => a.id === user.anggota_id) : null;
-      const firstDiv = user?.role === "spv" ? "ALL" : (myAng?.divisi_id || d[0]?.id);
+      const hd = myAng ? d.find((x) => x.head_anggota_id === myAng.id)?.id : null;
+      const firstDiv = user?.role === "spv" ? "ALL" : (hd || myAng?.divisi_id || d[0]?.id);
       if (!divisiId && firstDiv) setDivisiId(firstDiv);
     })();
     // eslint-disable-next-line
@@ -105,12 +121,13 @@ export default function Tasks() {
 
   const refresh = async () => {
     if (isTim && !divisiId) return;
-    const [t, l, rv] = await Promise.all([
+    const [t, l, rv, pm] = await Promise.all([
       fetchTasks(),
       listsDivisi ? listTaskLists({ divisi_id: listsDivisi }) : Promise.resolve([]),
       myAnggotaId || isSpv ? listTasks({ perlu_review: true }) : Promise.resolve([]),
+      pindahMenunggu().catch(() => []),
     ]);
-    setTasks(t); setLists(l); setReviewCount(rv.length); refreshAllListsMap();
+    setTasks(t); setLists(l); setReviewCount(rv.length + pm.length); setPindahList(pm); refreshAllListsMap();
     outlet?.refreshUnread?.();
   };
 
@@ -130,16 +147,23 @@ export default function Tasks() {
   const refreshAnggota = async () => setAnggotaAll(await listAnggota());
   const refreshLists = async () => { if (listsDivisi) setLists(await listTaskLists({ divisi_id: listsDivisi })); refreshAllListsMap(); };
 
-  const filtered = useMemo(() => tasks.filter((t) => {
+  const filteredRaw = useMemo(() => tasks.filter((t) => {
     if (filter.search && !t.nama?.toLowerCase().includes(filter.search.toLowerCase())) return false;
     if (filter.list_id !== "ALL" && (t.list_id || "no-list") !== filter.list_id) return false;
     if (filter.label_id !== "ALL" && !(t.label_ids || []).includes(filter.label_id)) return false;
     if (filter.penerima_id !== "ALL" && t.penerima_tugas_id !== filter.penerima_id) return false;
     return true;
   }), [tasks, filter]);
+  const filtered = useMemo(() => (SORTS[sortBy]?.fn ? [...filteredRaw].sort(SORTS[sortBy].fn) : filteredRaw), [filteredRaw, sortBy]);
+  const pilihSort = (v) => { setSortBy(v); try { localStorage.setItem(SORT_KEY, v); } catch { /* abaikan */ } };
+  const putuskan = async (id, setuju) => {
+    const catatan = setuju ? "" : (window.prompt("Alasan menolak (opsional):", "") || "");
+    try { await putuskanPindah(id, { setuju, catatan }); toast.success(setuju ? "Pemindahan disetujui" : "Pemindahan ditolak"); refresh(); }
+    catch (e) { toast.error(formatApiErr(e)); }
+  };
 
   const openNew = () => { setEditing(null); setForm({ ...emptyForm, divisi_id: myDivisiId || divisiId, list_id: lists.find((l) => !l.is_done)?.id || null, penerima_tugas_id: myAnggotaId, pemberi_id: myAnggotaId }); setTaskDialogOpen(true); };
-  const openEdit = (t) => { setEditing(t); setForm({ ...emptyForm, ...t, tanggal_mulai: t.tanggal_mulai || "", deadline: t.deadline || "", label_ids: t.label_ids || [], consulted_ids: t.consulted_ids || [], informed_ids: t.informed_ids || [] }); setTaskDialogOpen(true); };
+  const openEdit = (t) => { setEditing(t); setForm({ ...emptyForm, ...t, tanggal_mulai: t.tanggal_mulai || "", deadline: t.deadline || "", deadline_jam: t.deadline_jam || "", prioritas: t.prioritas || "", label_ids: t.label_ids || [], consulted_ids: t.consulted_ids || [], informed_ids: t.informed_ids || [] }); setTaskDialogOpen(true); };
   const openMove = (t) => { setMoveTaskState(t); setMoveOpen(true); };
 
   // keepOpen: dipakai tombol "Simpan & kirim untuk review" — simpan dulu, lalu aksi review menutup dialog.
@@ -147,11 +171,23 @@ export default function Tasks() {
     if (!form.nama.trim()) { toast.error("Nama tugas wajib diisi"); throw new Error("invalid"); }
     try {
       const payload = { ...form };
+      const alasanPindah = (payload._alasan_pindah || "").trim();
+      delete payload._alasan_pindah;
       if (!payload.tanggal_mulai) payload.tanggal_mulai = null;
-      if (!payload.deadline) payload.deadline = null;
+      if (!payload.deadline) { payload.deadline = null; payload.deadline_jam = ""; }
+      let ajukanKe = null;
+      if (editing && payload.penerima_tugas_id !== editing.penerima_tugas_id && !canGantiR(editing)) {
+        if (alasanPindah.length < 3) { toast.error("Tulis alasan pemindahan R untuk kepala tim"); throw new Error("invalid"); }
+        ajukanKe = payload.penerima_tugas_id;
+        payload.penerima_tugas_id = editing.penerima_tugas_id; // R tetap sampai disetujui
+      }
       delete payload.link_output; delete payload.pemberi_tugas;
       if (!editing && !payload.sasaran_id) delete payload.sasaran_id;
-      if (editing) { await updateTask(editing.id, payload); if (!keepOpen) toast.success("Tugas disimpan"); }
+      if (editing) {
+        await updateTask(editing.id, payload);
+        if (ajukanKe) { await ajukanPindah(editing.id, { penerima_id: ajukanKe, alasan: alasanPindah }); toast.success("Disimpan. Pengajuan ganti R dikirim ke kepala tim."); }
+        else if (!keepOpen) toast.success("Tugas disimpan");
+      }
       else {
         delete payload.catatan_spv;
         if (!payload.penerima_tugas_id) { toast.error("Pilih R (yang mengerjakan)"); return; }
@@ -221,19 +257,6 @@ export default function Tasks() {
   const filterActive = filter.search || filter.list_id !== "ALL" || filter.label_id !== "ALL" || filter.penerima_id !== "ALL";
   const filteredAnggotaCurrent = anggotaAll.filter((a) => a.divisi_id === divisiId);
 
-  const savePreset = () => {
-    const name = window.prompt("Nama preset:", "");
-    if (!name?.trim()) return;
-    const next = { ...presets, [name.trim()]: filter };
-    setPresets(next); localStorage.setItem(PRESET_KEY, JSON.stringify(next));
-    toast.success(`Preset "${name}" tersimpan`);
-  };
-  const applyPreset = (name) => { setFilter(presets[name]); toast.success(`Preset "${name}" dimuat`); };
-  const deletePreset = (name) => {
-    const next = { ...presets }; delete next[name];
-    setPresets(next); localStorage.setItem(PRESET_KEY, JSON.stringify(next));
-  };
-
   return (
     <div className="space-y-4">
       {/* Mode tabs */}
@@ -245,7 +268,7 @@ export default function Tasks() {
             { k: "berikan", label: "Saya berikan", hint: "Tugas yang Anda tanggung jawabi (A), dikerjakan orang lain" },
             { k: "diikuti", label: "Diikuti", hint: "Anda Consulted (C) atau Informed (I)" },
           ] : (isSpv ? [{ k: "review", label: "Perlu review", hint: "Semua hasil yang menunggu persetujuan", badge: reviewCount }] : [])),
-          { k: "tim", label: isSpv ? "Semua tugas tim" : "Tim saya", hint: "Semua tugas per tim" },
+          ...(canSeeTim ? [{ k: "tim", label: isSpv ? "Semua tugas tim" : "Tim saya", hint: "Semua tugas anggota tim Anda" }] : []),
         ].map((m) => (
           <button key={m.k} onClick={() => setMode(m.k)} title={m.hint} data-testid={`mode-${m.k}`}
             className={`relative rounded-lg px-3 py-1.5 text-sm font-medium transition ${mode === m.k ? "bg-emerald-900 text-white" : "text-emerald-900 hover:bg-emerald-50"}`}>
@@ -332,27 +355,12 @@ export default function Tasks() {
           </PopoverContent>
         </Popover>
 
-        {/* Preset chips + save */}
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button variant="outline" size="sm" data-testid="open-presets"><Bookmark size={12} /> Preset<ChevronDown size={11} /></Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-56 p-2" align="end">
-            <p className="mb-1 text-[10px] uppercase font-semibold text-emerald-800/60">Preset Filter</p>
-            <div className="max-h-40 space-y-0.5 overflow-auto">
-              {Object.keys(presets).length === 0 && <p className="px-2 py-1 text-[10px] italic text-emerald-800/50">Belum ada preset.</p>}
-              {Object.keys(presets).map((n) => (
-                <div key={n} className="group flex items-center gap-1 rounded px-1.5 py-1 text-xs hover:bg-emerald-50">
-                  <button onClick={() => applyPreset(n)} className="flex-1 text-left text-emerald-900" data-testid={`preset-${n}`}>{n}</button>
-                  <button onClick={() => deletePreset(n)} className="rounded p-0.5 text-red-500 opacity-0 hover:bg-red-50 group-hover:opacity-100"><X size={11} /></button>
-                </div>
-              ))}
-            </div>
-            <Button size="sm" onClick={savePreset} disabled={!filterActive} data-testid="save-preset" className="mt-2 w-full bg-emerald-700 text-xs hover:bg-emerald-800">
-              <Plus size={12} /> Simpan filter saat ini
-            </Button>
-          </PopoverContent>
-        </Popover>
+        <label className="flex items-center gap-1 rounded-md border border-emerald-200 bg-white px-2 text-xs text-emerald-900" title="Urutkan tugas">
+          <ArrowUpDown size={12} className="text-emerald-700" />
+          <select value={sortBy} onChange={(e) => pilihSort(e.target.value)} data-testid="sort-select" className="h-8 bg-transparent pr-1 text-xs outline-none">
+            {Object.entries(SORTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+        </label>
 
         {isTim && divisiId !== "ALL" && <div className="flex rounded-lg border border-emerald-200 bg-white p-1">
           <button data-testid="view-board" onClick={() => setView("board")}
@@ -378,6 +386,24 @@ export default function Tasks() {
         </div>
       )}
 
+      {mode === "review" && pindahList.length > 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3" data-testid="pindah-panel">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-amber-900">Pengajuan ganti penanggung jawab ({pindahList.length})</p>
+          <ul className="space-y-2">
+            {pindahList.map((t) => (
+              <li key={t.id} className="flex flex-wrap items-center gap-2 rounded-lg bg-white p-2 text-sm">
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium text-emerald-950">{t.nama}</p>
+                  <p className="text-[11px] text-emerald-800/70">{anggotaMap[t.pengajuan_pindah.dari_id]?.nama || "-"} → <b>{t.pengajuan_pindah.ke_nama}</b> · diajukan {t.pengajuan_pindah.oleh_nama}: “{t.pengajuan_pindah.alasan}”</p>
+                </div>
+                <Button size="sm" variant="outline" onClick={() => putuskan(t.id, false)} className="h-8 text-xs" data-testid={`pindah-tolak-${t.id}`}>Tolak</Button>
+                <Button size="sm" onClick={() => putuskan(t.id, true)} className="h-8 bg-emerald-800 text-xs text-white hover:bg-emerald-700" data-testid={`pindah-setuju-${t.id}`}>Setujui</Button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {/* Main */}
       {view === "board" && isTim && divisiId !== "ALL" ? (
         <KanbanBoard lists={lists} tasks={filtered} labels={labels} anggotaMap={anggotaMap} arsipMode={arsipMode} divisiId={divisiId}
@@ -396,6 +422,7 @@ export default function Tasks() {
       <TaskDialog open={taskDialogOpen} onOpenChange={setTaskDialogOpen} form={form} setForm={setForm} onSubmit={submit} editing={!!editing}
         lists={lists} labels={labels} anggotaAll={anggotaAll} divisiList={divisiList} currentDivisiId={divisiId}
         isSpv={isSpv} myAnggotaId={myAnggotaId} editingTask={editing} onRevisi={submitRevisi} onKirimReview={kirimReview} onSetujui={setujui} sasaranList={sasaranList}
+        canGantiR={!editing || canGantiR(editing)}
         onNeedMoveConfirm={(targetDivisiId, anggotaNama) => {
           if (!editing) return;
           const nama = divisiList.find((d) => d.id === targetDivisiId)?.nama;
@@ -403,7 +430,7 @@ export default function Tasks() {
             moveTask(editing.id, { divisi_id: targetDivisiId }).then(refresh);
           }
         }} />
-      <MoveTaskDialog open={moveOpen} onOpenChange={setMoveOpen} task={moveTaskState} divisiList={divisiList} allListsMap={allListsMap} refreshLists={refreshAllListsMap} onMoved={refresh} anggotaAll={anggotaAll} />
+      <MoveTaskDialog open={moveOpen} onOpenChange={setMoveOpen} task={moveTaskState} divisiList={divisiList} allListsMap={allListsMap} refreshLists={refreshAllListsMap} onMoved={refresh} anggotaAll={anggotaAll} canGantiR={canGantiR(moveTaskState)} />
       <BulkMoveDialog open={bulkMoveOpen} onOpenChange={setBulkMoveOpen} taskIds={selectedIds} divisiList={divisiList} allListsMap={allListsMap} onDone={() => { setSelectedIds([]); refresh(); }} />
       <DivisiManagerDialog open={divisiMgrOpen} onOpenChange={setDivisiMgrOpen} divisiList={divisiList} onChange={refreshDivisi} />
       <AnggotaManagerDialog open={anggotaMgrOpen} onOpenChange={setAnggotaMgrOpen} anggotaList={anggotaAll} divisiList={divisiList} currentDivisiId={divisiId} onChange={refreshAnggota} />
