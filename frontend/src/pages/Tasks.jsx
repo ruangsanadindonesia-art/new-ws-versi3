@@ -15,6 +15,7 @@ import {
   ajukanPindah, putuskanPindah, pindahMenunggu,
 } from "@/lib/api";
 import KanbanBoard from "./tasks/KanbanBoard";
+import StatusBoard from "./tasks/StatusBoard";
 import TableView from "./tasks/TableView";
 import {
   TaskDialog, MoveTaskDialog, BulkMoveDialog,
@@ -54,7 +55,11 @@ export default function Tasks() {
   const [anggotaAll, setAnggotaAll] = useState([]);
   const [allListsMap, setAllListsMap] = useState({});
   const [arsipMode, setArsipMode] = useState(false);
-  const [view, setView] = useState("table");
+  // Tampilan: HP default Kanban, desktop default Tabel; pilihan tersimpan per perangkat.
+  const [view, setViewState] = useState(() => {
+    try { return localStorage.getItem("ws_task_view_v1") || (window.innerWidth < 768 ? "board" : "table"); } catch { return "table"; }
+  });
+  const setView = (v) => { setViewState(v); try { localStorage.setItem("ws_task_view_v1", v); } catch { /* abaikan */ } };
   // Mode tampilan: saya (R) | review (A, menunggu review) | berikan (A, dikerjakan orang lain) | diikuti (C/I) | tim
   const [mode, setMode] = useState(user?.anggota_id ? "saya" : "tim");
   const [reviewCount, setReviewCount] = useState(0);
@@ -156,6 +161,20 @@ export default function Tasks() {
   }), [tasks, filter]);
   const filtered = useMemo(() => (SORTS[sortBy]?.fn ? [...filteredRaw].sort(SORTS[sortBy].fn) : filteredRaw), [filteredRaw, sortBy]);
   const pilihSort = (v) => { setSortBy(v); try { localStorage.setItem(SORT_KEY, v); } catch { /* abaikan */ } };
+  // Pindah kolom di Kanban status. Ke "Menunggu review" = kirim hasil untuk review; ke "Selesai" = server
+  // otomatis mengalihkan ke review bila tugas dari orang lain (R != A).
+  const pindahStatus = async (t, kol) => {
+    try {
+      if (kol === "REVIEW") { await submitReview(t.id); toast.success("Dikirim untuk review"); }
+      else {
+        const status = { BELUM: "BELUM_MULAI", PROSES: "DALAM_PROSES", SELESAI: "SELESAI" }[kol];
+        const saved = await updateTask(t.id, { status });
+        if (saved.status === "MENUNGGU_REVIEW" && status === "SELESAI") toast.success("Dikirim untuk review A sebelum selesai");
+        else if (saved.status !== status) toast.error("Anda tidak bisa mengubah status tugas ini (hanya R yang mengerjakan).");
+      }
+      refresh();
+    } catch (e) { toast.error(formatApiErr(e)); refresh(); }
+  };
   const putuskan = async (id, setuju) => {
     const catatan = setuju ? "" : (window.prompt("Alasan menolak (opsional):", "") || "");
     try { await putuskanPindah(id, { setuju, catatan }); toast.success(setuju ? "Pemindahan disetujui" : "Pemindahan ditolak"); refresh(); }
@@ -362,7 +381,7 @@ export default function Tasks() {
           </select>
         </label>
 
-        {isTim && divisiId !== "ALL" && <div className="flex rounded-lg border border-emerald-200 bg-white p-1">
+        {<div className="flex rounded-lg border border-emerald-200 bg-white p-1">
           <button data-testid="view-board" onClick={() => setView("board")}
             className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium ${view === "board" ? "bg-emerald-900 text-white" : "text-emerald-800"}`}><LayoutGrid size={13} /> Kanban</button>
           <button data-testid="view-table" onClick={() => setView("table")}
@@ -405,7 +424,9 @@ export default function Tasks() {
       )}
 
       {/* Main */}
-      {view === "board" && isTim && divisiId !== "ALL" ? (
+      {view === "board" && !(isTim && divisiId !== "ALL") ? (
+        <StatusBoard tasks={filtered} anggotaMap={anggotaMap} onEdit={openEdit} onPindah={pindahStatus} arsipMode={arsipMode} />
+      ) : view === "board" && isTim && divisiId !== "ALL" ? (
         <KanbanBoard lists={lists} tasks={filtered} labels={labels} anggotaMap={anggotaMap} arsipMode={arsipMode} divisiId={divisiId}
           selectedIds={selectedIds} setSelectedIds={setSelectedIds}
           onEdit={openEdit} onMove={openMove} onArchive={archive} onUnarchive={unarchive} onDelete={remove}

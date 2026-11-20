@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Link2, Upload, Search, Pin, PinOff, Trash2, ExternalLink, FileText, Image as ImageIcon, FolderOpen, Loader2, Pencil } from "lucide-react";
+import { Link2, Upload, Search, Pin, PinOff, Trash2, ExternalLink, FileText, Image as ImageIcon, FolderOpen, Loader2, Pencil, LayoutGrid, Table as TableIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -18,6 +18,8 @@ export default function MediaTim() {
   const [kat, setKat] = useState("");
   const [timFilter, setTimFilter] = useState("");
   const [dlg, setDlg] = useState(null); // {mode: "link"|"file"|"edit", item?}
+  const [tampil, setTampilState] = useState(() => { try { return localStorage.getItem("ws_media_view_v1") || "kartu"; } catch { return "kartu"; } });
+  const setTampil = (v) => { setTampilState(v); try { localStorage.setItem("ws_media_view_v1", v); } catch { /* abaikan */ } };
 
   const load = () => mediaList({ ...(kat ? { kategori: kat } : {}), ...(timFilter ? { divisi_id: timFilter } : {}) })
     .then(setD).catch((e) => toast.error(formatApiErr(e)));
@@ -61,6 +63,10 @@ export default function MediaTim() {
           <option value="">Semua kategori</option>
           {d.kategori.map((k) => <option key={k}>{k}</option>)}
         </select>
+        <div className="flex rounded-lg border border-emerald-200 bg-white p-1" role="group" aria-label="Tampilan">
+          <button onClick={() => setTampil("kartu")} data-testid="media-view-kartu" className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium ${tampil === "kartu" ? "bg-emerald-900 text-white" : "text-emerald-800"}`}><LayoutGrid size={13} /> Kartu</button>
+          <button onClick={() => setTampil("tabel")} data-testid="media-view-tabel" className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium ${tampil === "tabel" ? "bg-emerald-900 text-white" : "text-emerald-800"}`}><TableIcon size={13} /> Tabel</button>
+        </div>
         {d.is_spv && (
           <select value={timFilter} onChange={(e) => setTimFilter(e.target.value)} className="h-9 rounded-md border border-emerald-200 bg-white px-2 text-sm">
             <option value="">Semua tim</option>
@@ -73,6 +79,42 @@ export default function MediaTim() {
       {items.length === 0 ? (
         <div className="rounded-xl border border-dashed border-emerald-200 bg-white p-8 text-center text-sm text-emerald-800/70">
           Belum ada media{q || kat ? " yang cocok" : ""}. Mulai dengan menyimpan link folder Drive tim atau SOP yang paling sering dicari.
+        </div>
+      ) : tampil === "tabel" ? (
+        <div className="overflow-x-auto rounded-xl border border-emerald-100 bg-white" data-testid="media-tabel">
+          <table className="w-full min-w-[760px] text-sm">
+            <thead className="bg-emerald-50/60 text-left text-[11px] uppercase tracking-wide text-emerald-800/70">
+              <tr><th className="px-3 py-2 font-semibold">Judul</th><th className="px-3 py-2 font-semibold">Kategori</th><th className="px-3 py-2 font-semibold">Tim</th>
+                <th className="px-3 py-2 font-semibold">Jenis</th><th className="px-3 py-2 font-semibold">Oleh</th><th className="px-3 py-2 font-semibold">Tanggal</th><th className="px-3 py-2" /></tr>
+            </thead>
+            <tbody>
+              {items.map((m) => (
+                <tr key={m.id} className="border-t border-emerald-50 align-middle hover:bg-emerald-50/30" data-testid={`media-row-${m.id}`}>
+                  <td className="max-w-[320px] px-3 py-2">
+                    <a href={m.tipe === "LINK" ? m.url : mediaFileUrl(m.id)} target="_blank" rel="noopener noreferrer" className="inline-flex max-w-full items-center gap-1.5 font-medium text-emerald-950 hover:text-emerald-700 hover:underline">
+                      {m.tipe === "LINK" ? <Link2 size={13} className="shrink-0 text-emerald-600" /> : (m.mime || "").startsWith("image/") ? <ImageIcon size={13} className="shrink-0 text-emerald-600" /> : <FileText size={13} className="shrink-0 text-emerald-600" />}
+                      <span className="truncate">{m.judul}</span>
+                    </a>
+                    {(m.disematkan || m.catatan) && <p className="truncate pl-5 text-[11px] text-emerald-800/60">{m.disematkan && <b className="text-amber-700">Disematkan </b>}{m.catatan}</p>}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2 text-xs text-emerald-900">{m.kategori}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-xs text-emerald-900">{m.divisi_id ? dNama[m.divisi_id] || "Tim" : "Lembaga"}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-xs text-emerald-800/70">{m.tipe === "LINK" ? domain(m.url) : fmtUkuran(m.ukuran)}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-xs text-emerald-800/70">{m.dibuat_oleh}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-xs tabular-nums text-emerald-800/70">{new Date(m.created_at).toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" })}</td>
+                  <td className="whitespace-nowrap px-2 py-2 text-right">
+                    {m.bisa_ubah && (
+                      <span className="inline-flex gap-0.5">
+                        <button onClick={() => sematkan(m)} title={m.disematkan ? "Lepas sematan" : "Sematkan"} className="rounded p-1 text-amber-700 hover:bg-amber-50">{m.disematkan ? <PinOff size={14} /> : <Pin size={14} />}</button>
+                        <button onClick={() => setDlg({ mode: "edit", item: m })} title="Ubah" className="rounded p-1 text-emerald-700 hover:bg-emerald-50"><Pencil size={14} /></button>
+                        <button onClick={() => hapus(m)} title="Hapus" className="rounded p-1 text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       ) : (
         <ul className="grid gap-2 md:grid-cols-2">

@@ -23,6 +23,128 @@ def build_monitoring_router(db: AsyncIOMotorDatabase, get_current_user, user_sco
             return {"is_spv": False, "divisi": scope["head_divisi_id"]}
         raise HTTPException(403, "Hanya SPV atau Head Divisi yang bisa mengakses monitoring.")
 
+    # ================= PUSAT KENDALI (satu panggilan untuk layar Monitoring) =================
+    WIB = timezone(timedelta(hours=7))
+    RUTIN = ["HARIAN", "MINGGUAN", "BULANAN"]
+
+    def _batas(t: dict):
+        dl = t.get("deadline")
+        if not dl:
+            return None
+        try:
+            d = date.fromisoformat(str(dl)[:10])
+        except ValueError:
+            return None
+        hh, mm = (t.get("deadline_jam") or "23:59").split(":")
+        return datetime(d.year, d.month, d.day, int(hh), int(mm), tzinfo=WIB)
+
+    def _iso(v):
+        if not v:
+            return None
+        try:
+            x = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return x if x.tzinfo else x.replace(tzinfo=timezone.utc)
+
+    @router.get("/kendali")
+    async def kendali(divisi_id: Optional[str] = None, user: dict = Depends(get_current_user)):
+        """Daftar tugas yang perlu tindakan + ringkasan per tim & per orang.
+        Bucket (urutan prioritas): TERLAMBAT, HARI_INI, SEGERA (<=3 hari), REVIEW_LAMA (menunggu review >2 hari),
+        MACET (tidak ada perubahan >=3 hari), TANPA_DEADLINE. Tugas rutin tidak dihitung."""
+        g = await _guard(user, divisi_id)
+        if not g["is_spv"]:
+            divisi_id = g["divisi"]
+        anggota = await db.anggota.find({}, {"_id": 0, "id": 1, "nama": 1, "divisi_id": 1, "warna": 1}).to_list(1000)
+        amap = {a["id"]: a for a in anggota}
+        divisi = await db.divisi.find({}, {"_id": 0, "id": 1, "nama": 1, "warna": 1, "head_anggota_id": 1}).sort("urutan", 1).to_list(200)
+        dmap = {d["id"]: d for d in divisi}
+
+        def tim_of(t):  # tim tugas = tim R (fallback: divisi tempat tugas disimpan)
+            r = amap.get(t.get("penerima_tugas_id"))
+            return (r or {}).get("divisi_id") or t.get("divisi_id")
+
+        q = {"archived": {"$ne": True}, "kategori": {"$nin": RUTIN}}
+        if divisi_id:
+            members = [a["id"] for a in anggota if a.get("divisi_id") == divisi_id]
+            q["$or"] = [{"divisi_id": divisi_id}, {"penerima_tugas_id": {"$in": members}}]
+        rows = await db.tasks.find(q, {"_id": 0, "id": 1, "nama": 1, "status": 1, "deadline": 1, "deadline_jam": 1, "prioritas": 1,
+                                       "penerima_tugas_id": 1, "pemberi_id": 1, "divisi_id": 1, "updated_at": 1, "review_at": 1,
+                                       "selesai_at": 1, "approved_at": 1}).to_list(5000)
+        now = datetime.now(WIB)
+        today = now.date()
+        items, per_tim, per_orang = [], {}, {}
+        for t in rows:
+            tim = tim_of(t)
+            pt = per_tim.setdefault(tim, {"aktif": 0, "terlambat": 0, "hari_ini": 0, "segera": 0, "macet": 0, "dinilai_30": 0, "tepat_30": 0})
+            batas = _batas(t)
+            if t.get("status") == "SELESAI":
+                # Ketepatan 30 hari terakhir: tugas berdeadline yang jatuh tempo dalam 30 hari
+                if batas and (now - batas).days <= 30 and batas <= now + timedelta(days=0):
+                    pt["dinilai_30"] += 1
+                    sel = _iso(t.get("selesai_at") or t.get("approved_at") or t.get("updated_at"))
+                    if sel is None or sel <= batas:
+                        pt["tepat_30"] += 1
+                continue
+            r_id = t.get("penerima_tugas_id")
+            po = per_orang.setdefault(r_id or "_", {"aktif": 0, "terlambat": 0, "segera": 0, "macet": 0})
+            pt["aktif"] += 1
+            po["aktif"] += 1
+            upd = _iso(t.get("updated_at"))
+            diam = (now - upd).days if upd else 0
+            bucket, telat, sisa = None, None, None
+            if batas and batas < now:
+                bucket, telat = "TERLAMBAT", max(1, (today - batas.date()).days) if batas.date() < today else 0
+                pt["terlambat"] += 1
+                po["terlambat"] += 1
+                pt["dinilai_30"] += 1 if (now - batas).days <= 30 else 0
+            elif batas and batas.date() == today:
+                bucket = "HARI_INI"
+                pt["hari_ini"] += 1
+                po["segera"] += 1
+            elif batas and (batas.date() - today).days <= 3:
+                bucket, sisa = "SEGERA", (batas.date() - today).days
+                pt["segera"] += 1
+                po["segera"] += 1
+            elif t.get("status") == "MENUNGGU_REVIEW" and (now - (_iso(t.get("review_at")) or upd or now)).days >= 2:
+                bucket = "REVIEW_LAMA"
+            elif diam >= 3:
+                bucket = "MACET"
+                pt["macet"] += 1
+                po["macet"] += 1
+            elif not batas:
+                bucket = "TANPA_DEADLINE"
+            if not bucket:
+                continue
+            r = amap.get(r_id) or {}
+            items.append({"id": t["id"], "nama": t["nama"], "status": t.get("status"), "prioritas": t.get("prioritas"),
+                          "deadline": t.get("deadline"), "deadline_jam": t.get("deadline_jam"), "bucket": bucket,
+                          "telat_hari": telat, "sisa_hari": sisa, "diam_hari": diam,
+                          "r_id": r_id, "r_nama": r.get("nama") or "Belum ada R", "a_nama": (amap.get(t.get("pemberi_id")) or {}).get("nama"),
+                          "tim_id": tim, "tim_nama": (dmap.get(tim) or {}).get("nama") or "-"})
+        urut = {"TERLAMBAT": 0, "HARI_INI": 1, "SEGERA": 2, "REVIEW_LAMA": 3, "MACET": 4, "TANPA_DEADLINE": 5}
+        prio = {"TINGGI": 0, "SEDANG": 1, "RENDAH": 2}
+        items.sort(key=lambda x: (urut[x["bucket"]], -(x["telat_hari"] or 0), x["deadline"] or "9999", x.get("deadline_jam") or "23:59", prio.get(x.get("prioritas"), 3)))
+        summary = {b: sum(1 for i in items if i["bucket"] == b) for b in urut}
+        tim_rows = []
+        for d in divisi:
+            if divisi_id and d["id"] != divisi_id:
+                continue
+            v = per_tim.get(d["id"], {"aktif": 0, "terlambat": 0, "hari_ini": 0, "segera": 0, "macet": 0, "dinilai_30": 0, "tepat_30": 0})
+            tim_rows.append({"id": d["id"], "nama": d["nama"], "warna": d.get("warna"), "kepala": (amap.get(d.get("head_anggota_id")) or {}).get("nama"),
+                             **{k: v[k] for k in ("aktif", "terlambat", "hari_ini", "segera", "macet")},
+                             "tepat_waktu_pct": round(v["tepat_30"] / v["dinilai_30"] * 100) if v["dinilai_30"] else None})
+        orang_rows = []
+        for a_id, v in per_orang.items():
+            a = amap.get(a_id) or {}
+            if divisi_id and a.get("divisi_id") != divisi_id and a_id != "_":
+                continue
+            orang_rows.append({"id": a_id, "nama": a.get("nama") or "Belum ada R", "warna": a.get("warna"),
+                               "tim_nama": (dmap.get(a.get("divisi_id")) or {}).get("nama") or "-", **v})
+        orang_rows.sort(key=lambda x: (-x["terlambat"], -x["segera"], -x["aktif"]))
+        return {"items": items, "summary": summary, "per_tim": tim_rows, "per_orang": orang_rows,
+                "is_spv": g["is_spv"], "divisi_id": divisi_id, "dihitung_at": now.isoformat()}
+
     @router.get("/deadline-radar")
     async def deadline_radar(divisi_id: Optional[str] = None, user: dict = Depends(get_current_user)):
         g = await _guard(user, divisi_id)

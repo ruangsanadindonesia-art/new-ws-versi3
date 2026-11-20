@@ -1306,7 +1306,8 @@ async def add_comment(task_id: str, payload: CommentPayload, user: dict = Depend
     scope = await user_scope(user)
     if not scope["is_spv"]:
         roles = _raci_roles(task, scope["anggota_id"])
-        if not roles & {"R", "A", "C"} and not (task.get("kategori") in RUTIN_KATEGORI_SET and task.get("divisi_id") == scope["divisi_id"]):
+        # Kepala tim boleh berkomentar (mis. mengingatkan) di tugas anggota timnya.
+        if not roles & {"R", "A", "C"} and not await _boleh_ganti_r(scope, task):
             raise HTTPException(403, "Peran Informed hanya bisa melihat, tidak bisa berkomentar.")
     await _log_activity(task_id, user, "comment", payload.text.strip())
     return {"ok": True}
