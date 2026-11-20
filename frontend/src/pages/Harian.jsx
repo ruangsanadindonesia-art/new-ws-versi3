@@ -57,7 +57,8 @@ function HariIni({ onOpen }) {
   const [ukuran, setUkuran] = useState([]);
   const [ck, setCk] = useState(null);
   const loadUkuran = () => sasaranOverview().then((o) => setUkuran(o.ukuran_saya || [])).catch(() => {});
-  useEffect(() => { loadUkuran(); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (user?.role === "spv") loadUkuran(); }, [user?.role]);
 
   useEffect(() => {
     (async () => {
@@ -114,7 +115,8 @@ function HariIni({ onOpen }) {
     <div className="space-y-4" data-testid="hari-ini">
       <p className="text-sm text-emerald-800/70">{tanggal}. Centang yang sudah dikerjakan; tersimpan otomatis.</p>
 
-      {ukuran.length > 0 && (
+      {/* Check-in KPI disembunyikan untuk anggota sampai Target Bersama dibuka untuk tim */}
+      {user?.role === "spv" && ukuran.length > 0 && (
         <section className={`rounded-xl border ${ukuran.some((u) => u.perlu_update) ? "border-amber-200 bg-amber-50/50" : "border-emerald-100 bg-white"}`} data-testid="hari-sasaran">
           <header className="flex items-center justify-between gap-2 border-b border-emerald-50 px-4 py-3">
             <h3 className="flex items-center gap-2 font-display text-base font-semibold text-emerald-950"><Target size={16} className="text-emerald-700" /> Check-in KPI</h3>

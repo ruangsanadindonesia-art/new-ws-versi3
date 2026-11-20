@@ -59,7 +59,7 @@ export default function Tasks() {
   const [mode, setMode] = useState(user?.anggota_id ? "saya" : "tim");
   const [reviewCount, setReviewCount] = useState(0);
   const [sasaranList, setSasaranList] = useState([]);
-  const [filter, setFilter] = useState({ search: "", list_id: "ALL", label_id: "ALL", penerima_id: "ALL" });
+  const [filter, setFilter] = useState({ search: "", list_id: "ALL", prioritas: "ALL", penerima_id: "ALL" });
   const [selectedIds, setSelectedIds] = useState([]);
   const [sortBy, setSortBy] = useState(() => { try { return localStorage.getItem(SORT_KEY) || "cerdas"; } catch { return "cerdas"; } });
   const [pindahList, setPindahList] = useState([]);
@@ -150,7 +150,7 @@ export default function Tasks() {
   const filteredRaw = useMemo(() => tasks.filter((t) => {
     if (filter.search && !t.nama?.toLowerCase().includes(filter.search.toLowerCase())) return false;
     if (filter.list_id !== "ALL" && (t.list_id || "no-list") !== filter.list_id) return false;
-    if (filter.label_id !== "ALL" && !(t.label_ids || []).includes(filter.label_id)) return false;
+    if (filter.prioritas !== "ALL" && (t.prioritas || "NONE") !== filter.prioritas) return false;
     if (filter.penerima_id !== "ALL" && t.penerima_tugas_id !== filter.penerima_id) return false;
     return true;
   }), [tasks, filter]);
@@ -254,7 +254,7 @@ export default function Tasks() {
 
   const onReorderLocal = (r) => setTasks(r);
   const outletUnread = outlet?.unread?.by_divisi || {};
-  const filterActive = filter.search || filter.list_id !== "ALL" || filter.label_id !== "ALL" || filter.penerima_id !== "ALL";
+  const filterActive = filter.search || filter.list_id !== "ALL" || filter.prioritas !== "ALL" || filter.penerima_id !== "ALL";
   const filteredAnggotaCurrent = anggotaAll.filter((a) => a.divisi_id === divisiId);
 
   return (
@@ -341,15 +341,15 @@ export default function Tasks() {
                 <MiniSelect value={filter.list_id} onChange={(v) => setFilter({ ...filter, list_id: v })} options={[{ id: "ALL", nama: "Semua" }, ...lists, { id: "no-list", nama: "Tanpa status" }]} testId="filter-list" />
               </div>
               <div>
-                <label className="text-[10px] text-emerald-800/70">Label</label>
-                <MiniSelect value={filter.label_id} onChange={(v) => setFilter({ ...filter, label_id: v })} options={[{ id: "ALL", nama: "Semua" }, ...labels]} testId="filter-label" />
+                <label className="text-[10px] text-emerald-800/70">Prioritas</label>
+                <MiniSelect value={filter.prioritas} onChange={(v) => setFilter({ ...filter, prioritas: v })} options={[{ id: "ALL", nama: "Semua" }, { id: "TINGGI", nama: "Tinggi" }, { id: "SEDANG", nama: "Sedang" }, { id: "RENDAH", nama: "Rendah" }, { id: "NONE", nama: "Tanpa prioritas" }]} testId="filter-prioritas" />
               </div>
               <div>
                 <label className="text-[10px] text-emerald-800/70">Mengerjakan (R)</label>
                 <MiniSelect value={filter.penerima_id} onChange={(v) => setFilter({ ...filter, penerima_id: v })} options={[{ id: "ALL", nama: "Semua" }, ...filteredAnggotaCurrent]} testId="filter-penerima" />
               </div>
               {filterActive && (
-                <Button size="sm" variant="ghost" onClick={() => setFilter({ search: "", list_id: "ALL", label_id: "ALL", penerima_id: "ALL" })} className="w-full text-xs" data-testid="filter-reset"><X size={12} /> Reset</Button>
+                <Button size="sm" variant="ghost" onClick={() => setFilter({ search: "", list_id: "ALL", prioritas: "ALL", penerima_id: "ALL" })} className="w-full text-xs" data-testid="filter-reset"><X size={12} /> Reset</Button>
               )}
             </div>
           </PopoverContent>

@@ -66,10 +66,6 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
   const set = (k) => (e) => setForm({ ...form, [k]: e?.target ? e.target.value : e });
   const [revisiNote, setRevisiNote] = useState("");
   const [showDetail, setShowDetail] = useState(false);
-  const toggleLabel = (id) => {
-    const has = (form.label_ids || []).includes(id);
-    setForm({ ...form, label_ids: has ? form.label_ids.filter((x) => x !== id) : [...(form.label_ids || []), id] });
-  };
   const isRutin = form.kategori !== "PROJECT";
 
   // Hak per peran RACI. A (atau SPV) mengatur definisi tugas & RACI; R mengerjakan (status, kolom, hasil).
@@ -91,7 +87,7 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
   // R pada tugas yang wajib review tidak memilih "Selesai" sendiri — pakai tombol Kirim untuk review.
   const statusOptions = Object.entries(STATUS_LABELS).filter(([v]) =>
     v === form.status || isSpv || (v !== "MENUNGGU_REVIEW" && !(v === "SELESAI" && needsReview && !isA)));
-  const detailCount = [form.tanggal_mulai, (form.label_ids || []).length, form.catatan_spv, isRutin, form.sasaran_id].filter(Boolean).length;
+  const detailCount = [form.tanggal_mulai, form.catatan_spv, isRutin, form.sasaran_id].filter(Boolean).length;
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) setShowDetail(false); onOpenChange(v); }}>
@@ -258,7 +254,7 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
 
           <button type="button" onClick={() => setShowDetail((v) => !v)} data-testid="toggle-detail"
             className="flex w-full items-center justify-between rounded-md border border-dashed border-emerald-200 px-3 py-2 text-xs font-medium text-emerald-800 hover:bg-emerald-50">
-            <span>Detail lainnya{detailCount ? ` (${detailCount} terisi)` : ""} — objective (OKR), tipe, kolom, tanggal mulai, label{isSpv && editing ? ", catatan SPV" : ""}</span>
+            <span>Detail lainnya{detailCount ? ` (${detailCount} terisi)` : ""} — objective (OKR), tipe, kolom, tanggal mulai{isSpv && editing ? ", catatan SPV" : ""}</span>
             <span>{showDetail ? "Tutup" : "Buka"}</span>
           </button>
           {showDetail && (
@@ -299,20 +295,6 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
                   </div>
                 </div>
               )}
-              <div>
-                <label className="text-xs font-medium text-emerald-900">Label</label>
-                <div className="flex flex-wrap gap-1.5 rounded-md border border-emerald-100 bg-white p-2">
-                  {labels.length === 0 && <span className="text-xs text-emerald-700/60">Belum ada label.</span>}
-                  {labels.map((l) => {
-                    const active = (form.label_ids || []).includes(l.id);
-                    return (
-                      <button key={l.id} type="button" onClick={() => toggleLabel(l.id)} data-testid={`label-toggle-${l.id}`}
-                        className={`rounded-full px-2.5 py-0.5 text-xs font-semibold text-white transition ${active ? "ring-2 ring-offset-1 ring-emerald-900" : "opacity-60 hover:opacity-100"}`}
-                        style={{ background: l.warna }}>{l.nama}</button>
-                    );
-                  })}
-                </div>
-              </div>
               {editing && isSpv && (
                 <div>
                   <label className="text-xs font-medium text-emerald-900">Catatan SPV</label>

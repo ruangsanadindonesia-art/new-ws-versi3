@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { TIPES } from "./shared";
 import { RoleTag, raciRoles, PersonSelect, PeopleSelect, RaciLegend } from "./raci";
-import { PrioritasBadge } from "./dialogs";
 import { reorderTasks, createTaskList, updateTaskList, deleteTaskList, createTaskLabel, updateTaskLabel, deleteTaskLabel } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -69,12 +68,7 @@ export default function TableView({
                 <th className="w-36 p-3 font-semibold text-emerald-900" title="Accountable — menyetujui hasil"><span className="inline-flex items-center gap-1.5"><RoleTag role="A" /> Penyetuju</span></th>
                 <th className="w-36 p-3 font-semibold text-emerald-900" title="Consulted — dimintai masukan"><span className="inline-flex items-center gap-1.5"><RoleTag role="C" /> Konsultasi</span></th>
                 <th className="w-32 p-3 font-semibold text-emerald-900" title="Informed — diberi kabar"><span className="inline-flex items-center gap-1.5 whitespace-nowrap"><RoleTag role="I" /> Info</span></th>
-                <th className="p-3 font-semibold text-emerald-900">
-                  <ColumnHeader label="Label" items={labels} refresh={refreshLabels}
-                    onCreate={async (nama) => { await createTaskLabel({ nama, warna: "#f59e0b" }); }}
-                    onUpdate={async (item, patch) => { await updateTaskLabel(item.id, { ...item, ...patch }); }}
-                    onDelete={async (id) => { await deleteTaskLabel(id); }} />
-                </th>
+                <th className="w-28 p-3 font-semibold text-emerald-900">Prioritas</th>
                 <th className="w-32 p-3 font-semibold text-emerald-900">Mulai</th>
                 <th className="w-32 p-3 font-semibold text-emerald-900">Deadline</th>
                 <th className="w-48 p-3 font-semibold text-emerald-900">Hasil Tugas</th>
@@ -180,9 +174,8 @@ function Row({ task, idx, lists, labels, labelMap, listMap, anggotaAll, anggotaM
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
             <button onClick={() => onEdit(task)} className="block w-full truncate text-left font-medium text-emerald-950 hover:text-emerald-700 hover:underline" data-testid={`row-nama-${task.id}`}>{task.nama}</button>
-            {(isMoved || myRoles.length > 0 || task.brief_link || task.status === "REVISI" || task.prioritas || task.pengajuan_pindah) && (
+            {(isMoved || myRoles.length > 0 || task.brief_link || task.status === "REVISI" || task.pengajuan_pindah) && (
               <div className="mt-1 flex flex-wrap items-center gap-1">
-                <PrioritasBadge p={task.prioritas} />
                 {task.pengajuan_pindah && <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-800" title={`Diajukan pindah ke ${task.pengajuan_pindah.ke_nama}`}>PINDAH?</span>}
                 {isMoved && <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[9px] font-bold text-red-700">BARU</span>}
                 {task.status === "REVISI" && (
@@ -255,19 +248,19 @@ function Row({ task, idx, lists, labels, labelMap, listMap, anggotaAll, anggotaM
       </td>
 
       <td className="p-2">
-        <LabelCell task={task} labels={labels} labelMap={labelMap} onSaveCell={onSaveCell} onAddInline={async (nama) => { await createTaskLabel({ nama, warna: "#f59e0b" }); refreshLabels(); }} />
+        <PrioritasCell task={task} disabled={!canDef} onSaveCell={onSaveCell} />
       </td>
 
       <td className="p-2">
         <input type="date" defaultValue={task.tanggal_mulai || ""}
           onBlur={(e) => e.target.value !== (task.tanggal_mulai || "") && onSaveCell(task.id, { tanggal_mulai: e.target.value || null })}
-          className="w-full rounded border-transparent bg-transparent px-2 py-1 text-xs text-emerald-900 hover:border-emerald-200 focus:border-emerald-400 focus:outline-none"
+          className={`w-full rounded border-transparent bg-transparent px-2 py-1 text-xs hover:border-emerald-200 focus:border-emerald-400 focus:text-emerald-900 focus:outline-none ${task.tanggal_mulai ? "text-emerald-900" : "text-emerald-800/25"}`}
           data-testid={`row-mulai-${task.id}`} />
       </td>
       <td className="p-2">
         <input type="date" defaultValue={task.deadline || ""} disabled={!canDef}
           onBlur={(e) => e.target.value !== (task.deadline || "") && onSaveCell(task.id, { deadline: e.target.value || null })}
-          className="w-full rounded border-transparent bg-transparent px-2 py-1 text-xs text-emerald-900 hover:border-emerald-200 focus:border-emerald-400 focus:outline-none"
+          className={`w-full rounded border-transparent bg-transparent px-2 py-1 text-xs hover:border-emerald-200 focus:border-emerald-400 focus:text-emerald-900 focus:outline-none ${task.deadline ? "text-emerald-900" : "text-emerald-800/25"}`}
           data-testid={`row-deadline-${task.id}`} />
         {task.deadline && (
           <input type="time" defaultValue={task.deadline_jam || ""} disabled={!canDef} key={`${task.id}-${task.deadline_jam || ""}`}
@@ -368,6 +361,20 @@ function CellSelectWithAdd({ value, options, onChange, onAddInline, testId, plac
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+const PRIO_CELL = { TINGGI: "bg-red-100 text-red-700", SEDANG: "bg-amber-100 text-amber-800", RENDAH: "bg-slate-100 text-slate-600" };
+function PrioritasCell({ task, disabled, onSaveCell }) {
+  const v = task.prioritas || "";
+  return (
+    <select value={v} disabled={disabled} onChange={(e) => onSaveCell(task.id, { prioritas: e.target.value })} data-testid={`row-prioritas-${task.id}`}
+      aria-label="Prioritas" className={`w-full rounded-full border-0 px-2 py-1 text-[11px] font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-400 disabled:cursor-default ${PRIO_CELL[v] || "bg-transparent text-emerald-800/40"}`}>
+      <option value="">—</option>
+      <option value="TINGGI">Tinggi</option>
+      <option value="SEDANG">Sedang</option>
+      <option value="RENDAH">Rendah</option>
+    </select>
   );
 }
 

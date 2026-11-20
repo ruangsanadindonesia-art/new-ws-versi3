@@ -1271,7 +1271,7 @@ async def notifications_feed(user: dict = Depends(get_current_user)):
     elif scope["anggota_id"]:
         perlu_review = await db.tasks.count_documents({"status": "MENUNGGU_REVIEW", "archived": {"$ne": True}, "pemberi_id": scope["anggota_id"]})
     checkin_perlu = []
-    if scope["anggota_id"]:
+    if scope["anggota_id"] and scope["is_spv"]:  # check-in KPI baru dipakai SPV (Target Bersama khusus SPV)
         ap = await db.strategy_periods.find_one({"active": True}, {"_id": 0, "id": 1})
         if ap:
             batas = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
