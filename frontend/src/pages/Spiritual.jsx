@@ -15,11 +15,12 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   listAmaliyahItems, createAmaliyahItem, updateAmaliyahItem, deleteAmaliyahItem,
   bulkDeleteAmaliyahItems, reorderAmaliyahItems, amaliyahStreak,
-  listEntries, upsertEntry,
+  listEntries, upsertEntry, listUzur, setUzur,
 } from "@/lib/api";
 import { useAuth } from "@/lib/AuthContext";
 
-function fmt(d) { return d.toISOString().slice(0, 10); }
+// Tanggal lokal (WIB), bukan UTC — toISOString() menggeser 1 hari di zona +7.
+function fmt(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
 function daysInMonth(y, m) { return new Date(y, m + 1, 0).getDate(); }
 
 const BADGE_META = {
@@ -42,6 +43,8 @@ export default function Spiritual() {
   const [newNama, setNewNama] = useState("");
   const [newTarget, setNewTarget] = useState("1x/hari");
   const [selected, setSelected] = useState([]);
+  const isAkhwat = user?.jenis_kelamin === "P";
+  const [uzur, setUzurList] = useState([]);
   const [streak, setStreak] = useState({ current_streak: 0, longest_streak: 0, total_days: 0, badges: [], next_target: 7 });
 
   const year = cursor.getFullYear();
@@ -56,9 +59,10 @@ export default function Spiritual() {
   const load = async () => {
     const [it, en] = await Promise.all([listAmaliyahItems(), listEntries({ start, end })]);
     setItems(it); setEntries(en);
+    if (isAkhwat) listUzur(start, end).then(setUzurList).catch(() => setUzurList([]));
     amaliyahStreak().then(setStreak).catch(() => {});
   };
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [start, end]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [start, end, isAkhwat]);
 
   const entryMap = useMemo(() => {
     const m = new Map();
@@ -100,16 +104,28 @@ export default function Spiritual() {
     setSelected([]); load();
   };
 
+  const uzurSet = useMemo(() => new Set(uzur), [uzur]);
+  const tgl = (d) => `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  const toggleUzur = async (d) => {
+    const t = tgl(d); const next = !uzurSet.has(t);
+    setUzurList((u) => (next ? [...u, t] : u.filter((x) => x !== t)));
+    try { await setUzur(t, next); }
+    catch (e) { toast.error(e?.response?.data?.detail || "Gagal menyimpan"); setUzurList((u) => (next ? u.filter((x) => x !== t) : [...u, t])); }
+  };
+  // Hari haid: item yang gugur tidak masuk target & centang hari itu tidak dihitung.
   const stats = items.map((it, idx) => {
-    const count = days.reduce((acc, d) => {
-      const p = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-      return acc + (entryMap.get(`${it.id}::${p}`)?.checked ? 1 : 0);
-    }, 0);
-    return { ...it, count, target: dim, pct: Math.round((count / dim) * 100), idx };
+    let count = 0, target = 0;
+    days.forEach((d) => {
+      const gugur = it.gugur_haid && uzurSet.has(tgl(d));
+      if (gugur) return;
+      target += 1;
+      if (entryMap.get(`${it.id}::${tgl(d)}`)?.checked) count += 1;
+    });
+    return { ...it, count, target, pct: target ? Math.round((count / target) * 100) : 0, idx };
   });
 
   const totalChecked = stats.reduce((s, x) => s + x.count, 0);
-  const targetTotal = items.length * dim || 1;
+  const targetTotal = stats.reduce((s, x) => s + x.target, 0) || 1;
   const overallPct = Math.round((totalChecked / targetTotal) * 100);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
@@ -192,7 +208,11 @@ export default function Spiritual() {
 
       <div className="flex items-start gap-2 rounded-xl border border-emerald-100 bg-emerald-50/40 p-3 text-xs text-emerald-800/80">
         <Info size={14} className="mt-0.5 shrink-0 text-emerald-700" />
-        <p>Klik cell tanggal untuk toggle. {isSpv && "Drag ikon ⋮⋮ untuk urutkan. Checkbox baris untuk hapus masal."} Data amaliyah privat per user.</p>
+        <p>
+          Klik kotak tanggal untuk mencentang. {isSpv && "Drag ikon ⋮⋮ untuk urutkan. Checkbox baris untuk hapus masal. "}Data amaliyah privat per user.
+          {isAkhwat && <> <b className="text-rose-800">Haid:</b> klik tanggal di baris <b>Berhalangan (haid)</b> pada hari-hari Anda berhalangan. Hanya di tanggal itu, amaliyah bertanda <i>gugur saat haid</i> tidak dihitung.</>}
+          {isSpv && <> Penanda <i>gugur saat haid</i> di bawah nama item adalah <b>pengaturan item</b> (berlaku hanya pada tanggal yang ditandai haid oleh akhwat), bukan tanda sedang haid.</>}
+        </p>
       </div>
 
       {/* Bulk toolbar */}
@@ -236,6 +256,29 @@ export default function Spiritual() {
               </thead>
               <SortableContext items={stats.map((s) => s.id)} strategy={verticalListSortingStrategy}>
                 <tbody>
+                  {isAkhwat && (
+                    <tr className="border-t border-rose-100 bg-rose-50/40" data-testid="uzur-row">
+                      {isSpv && <td />}{isSpv && <td />}
+                      <td />
+                      <td className="sticky left-0 z-10 whitespace-nowrap bg-rose-50 p-2">
+                        <p className="text-sm font-medium text-rose-900">Berhalangan (haid)</p>
+                        <p className="text-[10px] text-rose-800/70">{uzur.length ? `${uzur.length} hari bulan ini` : "Tandai tanggalnya"} · hanya Anda yang melihat</p>
+                      </td>
+                      {days.map((d) => {
+                        const on = uzurSet.has(tgl(d));
+                        const future = new Date(year, month, d) > new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+                        return (
+                          <td key={d} className="p-1 text-center">
+                            <button disabled={future} onClick={() => toggleUzur(d)} data-testid={`uzur-${d}`} title={on ? "Berhalangan — klik untuk batalkan" : "Tandai berhalangan"}
+                              aria-pressed={on} className={`h-6 w-6 rounded text-[10px] font-bold transition disabled:opacity-30 ${on ? "bg-rose-500 text-white shadow-sm" : "border border-dashed border-rose-300 bg-white text-rose-300 hover:bg-rose-50"}`}>
+                              {on ? "H" : ""}
+                            </button>
+                          </td>
+                        );
+                      })}
+                      <td className="p-2 text-center text-[10px] text-rose-800/70">{uzur.length} hari</td>
+                    </tr>
+                  )}
                   {stats.map((it, idx) => (
                     <AmaliyahRow
                       key={it.id}
@@ -245,6 +288,7 @@ export default function Spiritual() {
                       year={year}
                       month={month}
                       entryMap={entryMap}
+                      uzurSet={uzurSet}
                       toggle={toggle}
                       updateItem={updateItem}
                       removeItem={removeItem}
@@ -285,7 +329,7 @@ function ScoreCard({ icon: Icon, label, value, sub, tone, testId }) {
   );
 }
 
-function AmaliyahRow({ it, idx, days, year, month, entryMap, toggle, updateItem, removeItem, isSpv, selected, setSelected }) {
+function AmaliyahRow({ it, idx, days, year, month, entryMap, uzurSet, toggle, updateItem, removeItem, isSpv, selected, setSelected }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: it.id, disabled: !isSpv });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
   const isSelected = selected.includes(it.id);
@@ -333,18 +377,27 @@ function AmaliyahRow({ it, idx, days, year, month, entryMap, toggle, updateItem,
             </div>
             <p className="text-[10px] text-emerald-700/60">{it.target_metrik}</p>
             {isSpv ? (
-              <label className="mt-0.5 flex items-center gap-1 text-[10px] text-emerald-800/70" title="Pada hari berhalangan (haid), item ini tidak masuk target dan skor">
-                <input type="checkbox" checked={!!it.gugur_haid} data-testid={`gugur-haid-${it.id}`}
-                  onChange={(e) => updateItem(it.id, { nama: it.nama, target_metrik: it.target_metrik, keterangan: it.keterangan, gugur_haid: e.target.checked })} />
-                Gugur saat haid
-              </label>
-            ) : it.gugur_haid ? <p className="text-[10px] text-rose-700/70">Gugur saat haid</p> : null}
+              <button type="button" data-testid={`gugur-haid-${it.id}`}
+                onClick={() => updateItem(it.id, { nama: it.nama, target_metrik: it.target_metrik, keterangan: it.keterangan, gugur_haid: !it.gugur_haid })}
+                title="Pengaturan item (SPV): bila aktif, item ini tidak dihitung pada tanggal yang ditandai haid oleh akhwat. Hari lain tetap dihitung."
+                className={`mt-1 rounded-full px-2 py-0.5 text-[10px] font-medium transition ${it.gugur_haid ? "bg-rose-100 text-rose-800 hover:bg-rose-200" : "border border-dashed border-emerald-200 text-emerald-700/60 hover:bg-emerald-50"}`}>
+                {it.gugur_haid ? "Gugur di hari haid · ubah" : "+ gugur di hari haid"}
+              </button>
+            ) : it.gugur_haid ? <p className="mt-0.5 text-[10px] text-rose-700/70">Gugur di hari haid</p> : null}
           </div>
         )}
       </td>
       {days.map((d) => {
         const p = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
         const e = entryMap.get(`${it.id}::${p}`);
+        if (it.gugur_haid && uzurSet?.has(p)) {
+          return (
+            <td key={d} className="p-1 text-center">
+              <span title="Gugur — berhalangan (haid), tidak dihitung" data-testid={`cell-${it.id}-${d}`}
+                className="mx-auto grid h-6 w-6 place-items-center rounded bg-rose-50 text-[11px] text-rose-400" style={{ backgroundImage: "repeating-linear-gradient(135deg, transparent 0 3px, rgba(244,63,94,.15) 3px 5px)" }}>–</span>
+            </td>
+          );
+        }
         return (
           <td key={d} className="p-1 text-center">
             <button data-testid={`cell-${it.id}-${d}`} onClick={() => toggle(it.id, d)}
