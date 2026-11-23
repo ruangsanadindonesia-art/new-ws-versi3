@@ -46,6 +46,25 @@ def _tgl_indo(s: str) -> Optional[str]:
         return None
 
 
+def jadwal(tayang: date, offsets: Dict[str, int], hari_ini: Optional[date] = None) -> Dict[str, str]:
+    """Deadline per tahap. Bila tanggal tayang terlalu dekat, tahap sebelum tayang dipadatkan secara proporsional
+    antara hari ini dan tanggal tayang (tidak ada deadline yang sudah lewat saat konten dibuat/digeser)."""
+    hari_ini = hari_ini or date.today()
+    off = {t: offsets.get(t, OFFSET[t]) for t in TAHAP}
+    terjauh = -min(off.values())  # mis. 5 (H-5)
+    tersedia = (tayang - hari_ini).days
+    out = {}
+    for t in TAHAP:
+        o = off[t]
+        if o < 0 and terjauh > 0 and tersedia < terjauh:
+            o = -int(max(0, tersedia) * (-o) / terjauh)  # skala ke rentang yang tersedia
+        out[t] = max(tayang + timedelta(days=o), hari_ini if o < 0 else tayang + timedelta(days=o)).isoformat()
+    return out
+
+
+PERFORMA_FIELD = ["views", "reach", "likes", "comments", "saves", "shares", "follows", "dm"]
+
+
 def build_konten_router(srv) -> APIRouter:
     db = srv.db
     get_current_user, user_scope = srv.get_current_user, srv.user_scope
@@ -147,11 +166,12 @@ def build_konten_router(srv) -> APIRouter:
         tayang = date.fromisoformat(k["tanggal_tayang"])
         sc = await user_scope(user)
         ids = {}
+        jd = jadwal(tayang, st.get("offset") or OFFSET)
         for t in TAHAP:
             r_id = (st.get("pic") or {}).get(t) or sc["anggota_id"]
             if not r_id:
                 raise HTTPException(400, f"PIC tahap {LABEL[t]} belum diatur di pengaturan Produksi Konten.")
-            dl = (tayang + timedelta(days=(st.get("offset") or OFFSET).get(t, OFFSET[t]))).isoformat()
+            dl = jd[t]
             tb = srv.TaskBase(nama=f"[{k['kode']}] {LABEL[t]}: {k['judul']}"[:300], kategori="PROJECT",
                               penerima_tugas_id=r_id, pemberi_id=r_id, deadline=dl,
                               catatan_tim=INSTRUKSI[t] + (f"\nNaskah: {k['naskah_url']}" if k.get("naskah_url") else ""))
@@ -261,8 +281,9 @@ def build_konten_router(srv) -> APIRouter:
         if upd.get("tanggal_tayang") and upd["tanggal_tayang"] != k.get("tanggal_tayang"):
             baru = _cek_tanggal(upd["tanggal_tayang"])
             st = await _settings()
+            jd = jadwal(baru, st.get("offset") or OFFSET)
             for t, tid in (k.get("task_ids") or {}).items():
-                dl = (baru + timedelta(days=(st.get("offset") or OFFSET).get(t, OFFSET[t]))).isoformat()
+                dl = jd[t]
                 await db.tasks.update_one({"id": tid, "status": {"$ne": "SELESAI"}}, {"$set": {"deadline": dl, "updated_at": _now()}})
         if upd.get("judul"):
             upd["judul"] = upd["judul"].strip()
@@ -288,6 +309,87 @@ def build_konten_router(srv) -> APIRouter:
             await srv.add_comment(tid, srv.CommentPayload(text=f"Ditashih oleh {payload.guru.strip()}. {payload.catatan.strip()}".strip()), user)
         await _selesaikan(k, "TASHIH", user)
         return (await _hiasi([await db.konten.find_one({"id": kid}, {"_id": 0})]))[0]
+
+    @router.get("/jadwal/pratinjau")
+    async def pratinjau(tanggal_tayang: str, user: dict = Depends(get_current_user)):
+        a = await _akses(user)
+        tayang = _cek_tanggal(tanggal_tayang)
+        off = a["st"].get("offset") or OFFSET
+        jd = jadwal(tayang, off)
+        normal = {t: (tayang + timedelta(days=off.get(t, OFFSET[t]))).isoformat() for t in TAHAP}
+        return {"deadline": jd, "dipadatkan": jd != normal, "minimal_hari": -min(off.values())}
+
+    class PerformaIn(BaseModel):
+        model_config = ConfigDict(extra="ignore")
+        platform: str
+        views: Optional[int] = Field(default=None, ge=0)
+        reach: Optional[int] = Field(default=None, ge=0)
+        likes: Optional[int] = Field(default=None, ge=0)
+        comments: Optional[int] = Field(default=None, ge=0)
+        saves: Optional[int] = Field(default=None, ge=0)
+        shares: Optional[int] = Field(default=None, ge=0)
+        follows: Optional[int] = Field(default=None, ge=0)
+        dm: Optional[int] = Field(default=None, ge=0)
+
+    @router.put("/{kid}/performa")
+    async def isi_performa(kid: str, payload: PerformaIn, user: dict = Depends(get_current_user)):
+        """Performa 72 jam per platform. Semua platform tujuan terisi -> tahap Laporan otomatis selesai."""
+        await _akses(user)
+        k = await db.konten.find_one({"id": kid}, {"_id": 0})
+        if not k:
+            raise HTTPException(404, "Konten tidak ditemukan.")
+        if payload.platform not in PLATFORM:
+            raise HTTPException(400, "Platform tidak dikenal.")
+        data = {f: getattr(payload, f) for f in PERFORMA_FIELD if getattr(payload, f) is not None}
+        if not data:
+            raise HTTPException(400, "Isi minimal satu angka.")
+        data.update({"diisi_at": _now(), "oleh": user.get("name")})
+        await db.konten.update_one({"id": kid}, {"$set": {f"performa.{payload.platform}": data}})
+        k2 = await db.konten.find_one({"id": kid}, {"_id": 0})
+        if k2.get("status") == "AKTIF" and all((k2.get("performa") or {}).get(p) for p in k2.get("platforms") or []):
+            await _selesaikan(k2, "LAPORAN", user)
+        return (await _hiasi([await db.konten.find_one({"id": kid}, {"_id": 0})]))[0]
+
+    @router.get("/rekap/performa")
+    async def rekap(dari: Optional[str] = None, sampai: Optional[str] = None, user: dict = Depends(get_current_user)):
+        """Rekap performa per platform, pilar, format, bucket + konten teratas. Interaksi = likes+comments+saves+shares."""
+        await _akses(user)
+        f: dict = {"performa": {"$exists": True}}
+        if dari or sampai:
+            f["tanggal_tayang"] = {**({"$gte": dari} if dari else {}), **({"$lte": sampai} if sampai else {})}
+        rows = await db.konten.find(f, {"_id": 0, "id": 1, "kode": 1, "judul": 1, "pilar": 1, "format": 1, "bucket": 1,
+                                         "tanggal_tayang": 1, "performa": 1, "cta_keyword": 1}).to_list(5000)
+        def kosong():
+            return {"konten": 0, "views": 0, "reach": 0, "interaksi": 0, "follows": 0, "dm": 0}
+        grup = {"platform": {}, "pilar": {}, "format": {}, "bucket": {}}
+        per_konten = []
+        for k in rows:
+            tot = kosong()
+            for p, m in (k.get("performa") or {}).items():
+                inter = sum(m.get(x) or 0 for x in ("likes", "comments", "saves", "shares"))
+                g = grup["platform"].setdefault(PLATFORM.get(p, p), kosong())
+                g["konten"] += 1
+                for key, val in (("views", m.get("views") or 0), ("reach", m.get("reach") or 0), ("interaksi", inter),
+                                 ("follows", m.get("follows") or 0), ("dm", m.get("dm") or 0)):
+                    g[key] += val
+                    tot[key] += val
+            for dim in ("pilar", "format", "bucket"):
+                g = grup[dim].setdefault((k.get(dim) or "—").strip() or "—", kosong())
+                g["konten"] += 1
+                for key in ("views", "reach", "interaksi", "follows", "dm"):
+                    g[key] += tot[key]
+            per_konten.append({"id": k["id"], "kode": k["kode"], "judul": k["judul"], "tanggal_tayang": k.get("tanggal_tayang"),
+                               "pilar": k.get("pilar"), "format": k.get("format"), **tot})
+
+        def selesaikan(d):
+            out = []
+            for nama, v in d.items():
+                out.append({"nama": nama, **v, "rata_views": round(v["views"] / v["konten"]) if v["konten"] else 0,
+                            "er": round(v["interaksi"] / v["reach"] * 100, 1) if v["reach"] else None})
+            return sorted(out, key=lambda x: -x["rata_views"])
+        return {"jumlah_konten": len(rows), **{d: selesaikan(v) for d, v in grup.items()},
+                "top_views": sorted(per_konten, key=lambda x: -x["views"])[:5],
+                "top_dm": [x for x in sorted(per_konten, key=lambda x: -x["dm"]) if x["dm"] > 0][:5]}
 
     @router.post("/{kid}/batal")
     async def batal(kid: str, user: dict = Depends(get_current_user)):

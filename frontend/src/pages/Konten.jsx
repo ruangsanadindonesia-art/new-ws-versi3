@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Plus, Upload, Settings2, ChevronLeft, ChevronRight, LayoutGrid, CalendarDays, List, Loader2, AlertTriangle, ExternalLink, Check, Search } from "lucide-react";
+import { Plus, Upload, Settings2, ChevronLeft, ChevronRight, LayoutGrid, CalendarDays, List, Loader2, AlertTriangle, ExternalLink, Check, Search, BarChart3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -17,6 +17,9 @@ const K = {
   tashih: (id, p) => api.post(`/konten/${id}/tashih`, p).then((r) => r.data),
   batal: (id) => api.post(`/konten/${id}/batal`).then((r) => r.data),
   atur: (p) => api.put("/konten/pengaturan/tahap", p).then((r) => r.data),
+  pratinjau: (t) => api.get("/konten/jadwal/pratinjau", { params: { tanggal_tayang: t } }).then((r) => r.data),
+  performa: (id, p) => api.put(`/konten/${id}/performa`, p).then((r) => r.data),
+  rekap: (p) => api.get("/konten/rekap/performa", { params: p }).then((r) => r.data),
   impor: (fd) => api.post("/konten/impor/csv", fd, { headers: { "Content-Type": "multipart/form-data" } }).then((r) => r.data),
 };
 const KOLOM = ["NASKAH", "TASHIH", "PRODUKSI", "APPROVAL", "POSTING", "LAPORAN", "SELESAI"];
@@ -76,7 +79,7 @@ export default function Konten() {
   };
   useEffect(() => { K.meta().then(setMeta).catch((e) => toast.error(formatApiErr(e))); listAnggota().then(setAnggota).catch(() => {}); }, []);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { setRows(null); load(); }, [view, bulan, arsip]);
+  useEffect(() => { if (view === "performa") return; setRows(null); load(); }, [view, bulan, arsip]);
   const segar = (k) => { if (k) setBuka(k); load(); };
 
   const filtered = useMemo(() => {
@@ -104,12 +107,12 @@ export default function Konten() {
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex rounded-lg border border-emerald-200 bg-white p-1">
-          {[["pipeline", "Pipeline", LayoutGrid], ["kalender", "Kalender", CalendarDays], ["daftar", "Daftar", List]].map(([k, l, I]) => (
+          {[["pipeline", "Pipeline", LayoutGrid], ["kalender", "Kalender", CalendarDays], ["daftar", "Daftar", List], ["performa", "Performa", BarChart3]].map(([k, l, I]) => (
             <button key={k} onClick={() => pilihView(k)} data-testid={`konten-view-${k}`}
               className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium ${view === k ? "bg-emerald-900 text-white" : "text-emerald-800"}`}><I size={13} /> {l}</button>
           ))}
         </div>
-        {view === "kalender" && (
+        {(view === "kalender" || view === "performa") && (
           <div className="flex items-center gap-1">
             <Button size="sm" variant="outline" className="h-8 w-8 p-0" onClick={() => setBulan(new Date(bulan.getFullYear(), bulan.getMonth() - 1, 1))}><ChevronLeft size={14} /></Button>
             <span className="min-w-[120px] text-center text-sm font-semibold text-emerald-950">{bulan.toLocaleDateString("id-ID", { month: "long", year: "numeric" })}</span>
@@ -123,7 +126,8 @@ export default function Konten() {
         </div>
       </div>
 
-      {rows === null ? <div className="grid place-items-center p-12"><Loader2 className="animate-spin text-emerald-800" /></div>
+      {view === "performa" ? <Performa bulan={bulan} onBuka={(x) => api.get(`/konten/${x.id}`).then((r) => setBuka(r.data)).catch((e) => toast.error(formatApiErr(e)))} />
+        : rows === null ? <div className="grid place-items-center p-12"><Loader2 className="animate-spin text-emerald-800" /></div>
         : view === "pipeline" ? <Pipeline rows={filtered} onBuka={setBuka} />
         : view === "kalender" ? <Kalender rows={filtered} bulan={bulan} onBuka={setBuka} />
         : <Daftar rows={filtered} onBuka={setBuka} />}
@@ -252,6 +256,8 @@ function BaruDialog({ meta, onClose, onSaved }) {
   const besok = new Date(); besok.setDate(besok.getDate() + 7);
   const [f, setF] = useState({ judul: "", tanggal_tayang: ymd(besok), format: "Reels", platforms: ["IG", "TIKTOK", "SHORT"], pilar: "", bucket: "VALUE", funnel: "", cta_keyword: "", naskah_url: "", brief: "" });
   const [busy, setBusy] = useState(false);
+  const [pv, setPv] = useState(null);
+  useEffect(() => { if (!f.tanggal_tayang) return; K.pratinjau(f.tanggal_tayang).then(setPv).catch(() => setPv(null)); }, [f.tanggal_tayang]);
   const simpan = async () => {
     setBusy(true);
     try { const k = await K.buat(f); toast.success(`${k.kode} dibuat — ${k.tahapan.length} tugas otomatis untuk tim`); onSaved(k); }
@@ -264,12 +270,9 @@ function BaruDialog({ meta, onClose, onSaved }) {
         <DialogHeader><DialogTitle className="font-display text-lg">Konten baru</DialogTitle>
           <DialogDescription className="text-emerald-800/70">Tugas tiap tahap dibuat otomatis untuk PIC dengan deadline mundur dari tanggal tayang.</DialogDescription></DialogHeader>
         <FormFields f={f} setF={setF} meta={meta} />
-        <div className="rounded-lg bg-emerald-50/60 p-2.5 text-[11px] text-emerald-900">
-          {meta.tahap.map((t) => {
-            const d = f.tanggal_tayang ? new Date(`${f.tanggal_tayang}T00:00:00`) : null;
-            if (d) d.setDate(d.getDate() + (t.offset || 0));
-            return <p key={t.k}><b>{t.label}</b> — {t.pic_nama || "PIC belum diatur"} · {d ? tglPendek(ymd(d)) : "-"}</p>;
-          })}
+        <div className={`rounded-lg p-2.5 text-[11px] ${pv?.dipadatkan ? "border border-amber-300 bg-amber-50 text-amber-950" : "bg-emerald-50/60 text-emerald-900"}`} data-testid="kt-jadwal">
+          {pv?.dipadatkan && <p className="mb-1 font-semibold"><AlertTriangle size={11} className="mb-0.5 mr-1 inline" />Tanggal tayang kurang dari {pv.minimal_hari} hari lagi — jadwal tahap dipadatkan mulai hari ini. Pastikan tim sanggup, atau mundurkan tanggal tayang.</p>}
+          {meta.tahap.map((t) => <p key={t.k}><b>{t.label}</b> — {t.pic_nama || "PIC belum diatur"} · {pv ? tglPendek(pv.deadline[t.k]) : "-"}</p>)}
         </div>
         <DialogFooter><Button variant="outline" onClick={onClose}>Batal</Button>
           <Button onClick={simpan} disabled={busy || !f.judul.trim()} className="bg-emerald-900 text-white hover:bg-emerald-800" data-testid="kt-simpan">{busy && <Loader2 size={14} className="animate-spin" />} Buat konten</Button></DialogFooter>
@@ -343,6 +346,8 @@ function DetailKonten({ k, meta, onClose, onSaved }) {
             <p className="text-[10px] text-emerald-800/50">Semua platform terisi → tahap Posting otomatis selesai.</p>
           </section>
 
+          <PerformaForm k={k} onSaved={onSaved} />
+
           <section className="space-y-2 border-t border-emerald-50 pt-3">
             <p className="text-xs font-semibold text-emerald-900">Detail konten</p>
             <FormFields f={f} setF={setF} meta={meta} />
@@ -413,5 +418,112 @@ function AturDialog({ meta, anggota, onClose, onSaved }) {
         <DialogFooter><Button variant="outline" onClick={onClose}>Batal</Button><Button onClick={simpan} className="bg-emerald-900 text-white hover:bg-emerald-800">Simpan</Button></DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+const METRIK = [["views", "Views"], ["reach", "Reach"], ["likes", "Likes"], ["comments", "Komentar"], ["saves", "Simpan"], ["shares", "Bagikan"], ["follows", "Follow"], ["dm", "DM / tanya"]];
+
+function PerformaForm({ k, onSaved }) {
+  const plat = k.platforms || [];
+  const [p, setP] = useState(plat[0] || "IG");
+  const [v, setV] = useState({});
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setV(Object.fromEntries(METRIK.map(([f]) => [f, k.performa?.[p]?.[f] ?? ""]))); }, [p, k]);
+  const tayang = k.tanggal_tayang ? new Date(`${k.tanggal_tayang}T00:00:00`) : null;
+  const sudah72 = tayang && (Date.now() - tayang.getTime()) / 36e5 >= 72;
+  const simpan = async () => {
+    const body = { platform: p };
+    METRIK.forEach(([f]) => { if (v[f] !== "" && v[f] != null) body[f] = Math.max(0, parseInt(v[f], 10) || 0); });
+    setBusy(true);
+    try { const r = await K.performa(k.id, body); toast.success(`Performa ${PLAT[p]} tersimpan`); onSaved(r); }
+    catch (e) { toast.error(formatApiErr(e)); }
+    setBusy(false);
+  };
+  if (!plat.length) return null;
+  return (
+    <section className="space-y-2 border-t border-emerald-50 pt-3" data-testid="kt-performa">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs font-semibold text-emerald-900">Performa 72 jam</p>
+        {!sudah72 && <span className="text-[10px] text-amber-700">Idealnya diisi 72 jam setelah tayang</span>}
+        <div className="ml-auto flex gap-1">
+          {plat.map((x) => (
+            <button key={x} onClick={() => setP(x)} className={`rounded-full border px-2.5 py-0.5 text-[11px] ${p === x ? "border-emerald-800 bg-emerald-800 text-white" : "border-emerald-200 text-emerald-900"}`}>
+              {PLAT[x]}{k.performa?.[x] ? " ✓" : ""}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="grid grid-cols-4 gap-2">
+        {METRIK.map(([f, l]) => (
+          <label key={f} className="text-[10px] text-emerald-800/70">{l}
+            <Input inputMode="numeric" value={v[f] ?? ""} onChange={(e) => setV({ ...v, [f]: e.target.value.replace(/[^0-9]/g, "") })} className="h-8 bg-white text-xs" data-testid={`kt-perf-${f}`} />
+          </label>
+        ))}
+      </div>
+      <div className="flex items-center gap-2">
+        <Button size="sm" variant="outline" disabled={busy} onClick={simpan} className="h-8 text-xs" data-testid="kt-perf-simpan">Simpan performa {PLAT[p]}</Button>
+        {k.performa?.[p]?.diisi_at && <span className="text-[10px] text-emerald-800/50">diisi {k.performa[p].oleh} · {new Date(k.performa[p].diisi_at).toLocaleDateString("id-ID", { day: "numeric", month: "short" })}</span>}
+      </div>
+      <p className="text-[10px] text-emerald-800/50">Semua platform terisi → tahap Laporan otomatis selesai.</p>
+    </section>
+  );
+}
+
+const fmt = (n) => (n == null ? "—" : n >= 1e6 ? `${(n / 1e6).toFixed(1)}jt` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}rb` : String(n));
+
+function TabelRekap({ judul, rows }) {
+  return (
+    <section className="overflow-hidden rounded-xl border border-emerald-100 bg-white">
+      <p className="border-b border-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-950">{judul}</p>
+      {rows.length === 0 ? <p className="px-4 py-3 text-xs text-emerald-800/50">Belum ada data.</p> : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="text-[10px] uppercase tracking-wide text-emerald-800/50"><tr>
+              <th className="px-4 py-1.5 text-left font-medium">{judul.replace("Per ", "")}</th><th className="px-2 text-right font-medium">Konten</th>
+              <th className="px-2 text-right font-medium">Rata views</th><th className="px-2 text-right font-medium">Reach</th><th className="px-2 text-right font-medium" title="Interaksi ÷ reach">ER</th><th className="px-4 text-right font-medium">DM</th></tr></thead>
+            <tbody>{rows.map((r) => (
+              <tr key={r.nama} className="border-t border-emerald-50"><td className="px-4 py-1.5 font-medium text-emerald-950">{r.nama}</td><td className="px-2 text-right tabular-nums">{r.konten}</td>
+                <td className="px-2 text-right font-semibold tabular-nums">{fmt(r.rata_views)}</td><td className="px-2 text-right tabular-nums">{fmt(r.reach)}</td>
+                <td className="px-2 text-right tabular-nums">{r.er == null ? "—" : `${r.er}%`}</td><td className="px-4 text-right tabular-nums">{r.dm}</td></tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Performa({ bulan, onBuka }) {
+  const [d, setD] = useState(null);
+  useEffect(() => {
+    setD(null);
+    K.rekap({ dari: ymd(bulan), sampai: ymd(new Date(bulan.getFullYear(), bulan.getMonth() + 1, 0)) }).then(setD).catch((e) => toast.error(formatApiErr(e)));
+  }, [bulan]);
+  if (!d) return <div className="grid place-items-center p-12"><Loader2 className="animate-spin text-emerald-800" /></div>;
+  if (!d.jumlah_konten) return <div className="rounded-xl border border-dashed border-emerald-200 bg-white p-8 text-center text-sm text-emerald-800/70">Belum ada performa yang diisi untuk bulan ini. Isi di kartu konten → Performa 72 jam.</div>;
+  const Top = ({ judul, list, key2 }) => (
+    <section className="overflow-hidden rounded-xl border border-emerald-100 bg-white">
+      <p className="border-b border-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-950">{judul}</p>
+      <ol className="divide-y divide-emerald-50">{list.map((x, i) => (
+        <li key={x.id}><button onClick={() => onBuka(x)} className="flex w-full items-center gap-2 px-4 py-2 text-left text-xs hover:bg-emerald-50/50">
+          <span className="w-4 font-semibold text-emerald-800/50">{i + 1}</span><span className="min-w-0 flex-1 truncate text-emerald-950">{x.judul}</span>
+          <span className="font-semibold tabular-nums text-emerald-900">{fmt(x[key2])}</span></button></li>
+      ))}{list.length === 0 && <li className="px-4 py-3 text-xs text-emerald-800/50">Belum ada.</li>}</ol>
+    </section>
+  );
+  return (
+    <div className="space-y-4" data-testid="konten-performa">
+      <p className="text-xs text-emerald-800/70">{d.jumlah_konten} konten berdata performa bulan ini. ER = (likes + komentar + simpan + bagikan) ÷ reach.</p>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Top judul="Views tertinggi" list={d.top_views} key2="views" />
+        <Top judul="DM / pertanyaan terbanyak" list={d.top_dm} key2="dm" />
+      </div>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <TabelRekap judul="Per platform" rows={d.platform} />
+        <TabelRekap judul="Per pilar" rows={d.pilar} />
+        <TabelRekap judul="Per format" rows={d.format} />
+        <TabelRekap judul="Per bucket" rows={d.bucket} />
+      </div>
+    </div>
   );
 }
