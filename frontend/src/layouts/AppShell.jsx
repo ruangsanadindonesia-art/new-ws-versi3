@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import NotificationBell from "@/components/NotificationBell";
-import { ListTodo, HeartHandshake, BarChart3, Settings, Menu, X, LogOut, ShieldCheck, Users, Target, FolderOpen } from "lucide-react";
+import { ListTodo, HeartHandshake, BarChart3, Settings, Menu, X, LogOut, ShieldCheck, Users, Target, FolderOpen, Clapperboard } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 import { unreadTasks } from "@/lib/api";
@@ -15,6 +15,7 @@ const NAV = [
   { to: "/tasks", label: "Tugas", icon: ListTodo, testId: "nav-tasks", badgeKey: "tasks" },
   { to: "/harian", label: "Harian Saya", icon: HeartHandshake, testId: "nav-harian" },
   { to: "/target", label: "Target Bersama", icon: Target, testId: "nav-target", spvOnly: true },
+  { to: "/konten", label: "Produksi Konten", icon: Clapperboard, testId: "nav-konten", kontenOnly: true },
   { to: "/media", label: "Media Tim", icon: FolderOpen, testId: "nav-media" },
   { to: "/laporan", label: "Laporan", icon: BarChart3, testId: "nav-laporan" },
   { to: "/pengaturan", label: "Pengaturan", icon: Settings, testId: "nav-pengaturan" },
@@ -26,7 +27,7 @@ const HIDDEN_TITLES = [
 
 // Menu bertanda spvOnly hanya tampil untuk SPV (anggota & kepala tim tidak melihatnya).
 function navFor(user) {
-  return NAV.filter((n) => !n.spvOnly || user?.role === "spv");
+  return NAV.filter((n) => (!n.spvOnly || user?.role === "spv") && (!n.kontenOnly || user?.konten_akses));
 }
 
 function SidebarBody({ onNavigate, unreadTotal, user, onLogout }) {

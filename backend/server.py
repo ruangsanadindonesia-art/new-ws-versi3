@@ -1188,8 +1188,13 @@ async def my_scope(user: dict = Depends(get_current_user)):
     if scope["head_divisi_id"]:
         d = await db.divisi.find_one({"id": scope["head_divisi_id"]}, {"_id": 0, "nama": 1})
         head_nama = d.get("nama") if d else None
+    try:
+        await konten_router.akses_fn(user)
+        konten_akses = True
+    except HTTPException:
+        konten_akses = False
     return {**scope, "head_divisi_nama": head_nama, "role": user.get("role"),
-            "can_monitor": scope["is_spv"] or scope["is_head"]}
+            "can_monitor": scope["is_spv"] or scope["is_head"], "konten_akses": konten_akses}
 
 
 # ============ NOTIFICATION FEED (delegasi + reminder deadline + approval) ============
@@ -2379,6 +2384,9 @@ from ritme import build_ritme_router
 api_router.include_router(build_ritme_router(_sys.modules[__name__]))
 from media import build_media_router
 api_router.include_router(build_media_router(_sys.modules[__name__]))
+from konten import build_konten_router
+konten_router = build_konten_router(_sys.modules[__name__])
+api_router.include_router(konten_router)
 
 # Include router
 app.include_router(api_router)
@@ -2422,6 +2430,9 @@ async def on_startup():
         await db.rapat_target.create_index([("period_id", 1), ("minggu", 1)], unique=True)
         await db.isu_target.create_index([("period_id", 1), ("status", 1)])
         await db.media_items.create_index([("divisi_id", 1), ("created_at", -1)])
+        await db.konten.create_index("kode", unique=True)
+        await db.konten.create_index([("status", 1), ("tanggal_tayang", 1)])
+        await db.tasks.create_index("konten_id", sparse=True)
         await db.amaliyah_uzur.create_index([("user_id", 1), ("tanggal", 1)], unique=True)
     except Exception:
         pass

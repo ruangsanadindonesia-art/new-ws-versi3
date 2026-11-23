@@ -20,6 +20,7 @@ import Harian from "@/pages/Harian";
 import Laporan from "@/pages/Laporan";
 import Pengaturan from "@/pages/Pengaturan";
 import MediaTim from "@/pages/MediaTim";
+import Konten from "@/pages/Konten";
 
 function AppRouter() {
   const location = useLocation();
@@ -38,6 +39,7 @@ function AppRouter() {
         <Route path="/laporan" element={<Laporan />} />
         <Route path="/pengaturan" element={<Pengaturan />} />
         <Route path="/media" element={<MediaTim />} />
+        <Route path="/konten" element={<Konten />} />
         <Route path="/beranda" element={<Dashboard />} />
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/tugas-rutin" element={<TugasRutin />} />
