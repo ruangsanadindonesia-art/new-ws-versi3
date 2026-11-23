@@ -761,6 +761,12 @@ async def update_task(task_id: str, payload: TaskUpdate, user: dict = Depends(ge
         if mid:
             update["list_id"] = mid
         submitted_review = True
+    if task.get("konten_tahap") and update.get("status") in ("SELESAI", "MENUNGGU_REVIEW") and task.get("status") != "SELESAI":
+        k = await db.konten.find_one({"id": task.get("konten_id")}, {"_id": 0, "task_ids": 1})
+        sebelum = await konten_router.tahap_terbuka_fn(k or {}, task["konten_tahap"]) if k else None
+        if sebelum:
+            from konten import LABEL as _KL
+            raise HTTPException(400, f"Tahap konten sebelumnya ({_KL[sebelum]}) belum selesai.")
     _stamp_selesai(task, update)
     update["updated_at"] = now_iso()
     result = await db.tasks.find_one_and_update(

@@ -187,7 +187,7 @@ def build_konten_router(srv) -> APIRouter:
     async def _hiasi(rows: List[dict]) -> List[dict]:
         tids = [tid for k in rows for tid in (k.get("task_ids") or {}).values()]
         tasks = {t["id"]: t for t in await db.tasks.find({"id": {"$in": tids}}, {"_id": 0, "id": 1, "status": 1, "deadline": 1,
-                                                                                   "penerima_tugas_id": 1, "selesai_at": 1}).to_list(10000)}
+                                                                                   "penerima_tugas_id": 1, "selesai_at": 1, "revisi_catatan": 1, "revisi_count": 1}).to_list(10000)}
         amap = {a["id"]: a["nama"] for a in await db.anggota.find({}, {"_id": 0, "id": 1, "nama": 1}).to_list(1000)}
         today = date.today().isoformat()
         for k in rows:
@@ -203,7 +203,8 @@ def build_konten_router(srv) -> APIRouter:
                     sekarang = t
                 tahapan.append({"tahap": t, "label": LABEL[t], "task_id": task["id"], "status": task.get("status"), "selesai": done,
                                 "deadline": task.get("deadline"), "telat": lewat, "pic_id": task.get("penerima_tugas_id"),
-                                "pic_nama": amap.get(task.get("penerima_tugas_id"))})
+                                "pic_nama": amap.get(task.get("penerima_tugas_id")),
+                                "revisi_catatan": task.get("revisi_catatan") if task.get("status") == "REVISI" else None})
             if k.get("status") in ("ARSIP", "BATAL"):
                 sekarang = k["status"]
             k["tahap"] = sekarang or ("SELESAI" if tahapan else "ARSIP")
@@ -258,14 +259,86 @@ def build_konten_router(srv) -> APIRouter:
             raise HTTPException(404, "Konten tidak ditemukan.")
         return (await _hiasi([k]))[0]
 
-    async def _selesaikan(k: dict, tahap: str, user: dict):
+    async def _boleh_tahap(k: dict, tahap: str, user: dict) -> bool:
+        """PIC tahap itu, kepala tim konten, atau SPV."""
+        a = await _akses(user)
+        if a["lead"]:
+            return True
+        tid = (k.get("task_ids") or {}).get(tahap)
+        t = await db.tasks.find_one({"id": tid}, {"_id": 0, "penerima_tugas_id": 1}) if tid else None
+        return bool(t and a["anggota_id"] and t.get("penerima_tugas_id") == a["anggota_id"])
+
+    async def _tahap_terbuka_sebelum(k: dict, tahap: str) -> Optional[str]:
+        ids = k.get("task_ids") or {}
+        for t in TAHAP[:TAHAP.index(tahap)]:
+            if ids.get(t):
+                x = await db.tasks.find_one({"id": ids[t]}, {"_id": 0, "status": 1, "archived": 1})
+                if x and x.get("status") != "SELESAI" and not x.get("archived"):
+                    return t
+        return None
+
+    async def _tandai(k: dict, tahap: str, user: dict, catatan: str = "", wajib: bool = True) -> bool:
+        """Selesaikan tugas tahap (langsung di DB, dengan log). wajib=False: diam bila tidak berhak/urutan belum sampai."""
         tid = (k.get("task_ids") or {}).get(tahap)
         t = await db.tasks.find_one({"id": tid}, {"_id": 0}) if tid else None
-        if t and t.get("status") != "SELESAI":
-            try:
-                await srv.update_task(tid, srv.TaskUpdate(status="SELESAI"), user)
-            except HTTPException:
-                pass  # bukan R/SPV: biarkan PIC yang menandai selesai di Tugas
+        if not t or t.get("status") == "SELESAI":
+            return False
+        if not await _boleh_tahap(k, tahap, user):
+            if wajib:
+                raise HTTPException(403, f"Tahap {LABEL[tahap]} dikerjakan oleh PIC-nya (atau kepala tim/SPV).")
+            return False
+        sebelum = await _tahap_terbuka_sebelum(k, tahap)
+        if sebelum:
+            if wajib:
+                raise HTTPException(400, f"Selesaikan dulu tahap {LABEL[sebelum]}.")
+            return False
+        upd = {"status": "SELESAI", "selesai_at": _now(), "updated_at": _now()}
+        await srv._sync_status_list(t, upd)
+        await db.tasks.update_one({"id": tid}, {"$set": upd})
+        await srv._log_activity(tid, user, "status", f"{LABEL[tahap]} selesai" + (f" — {catatan}" if catatan else ""))
+        return True
+
+    router.tahap_terbuka_fn = _tahap_terbuka_sebelum
+
+    async def _selesaikan(k: dict, tahap: str, user: dict):
+        await _tandai(k, tahap, user, wajib=False)
+
+    class AksiIn(BaseModel):
+        catatan: str = Field(default="", max_length=1000)
+
+    @router.post("/{kid}/tahap/{tahap}/selesai")
+    async def tahap_selesai(kid: str, tahap: str, payload: AksiIn, user: dict = Depends(get_current_user)):
+        """Tombol aksi tahap di kartu konten (Naskah selesai, Hasil siap, Setujui, Sudah diposting, Laporan selesai)."""
+        await _akses(user)
+        k = await db.konten.find_one({"id": kid}, {"_id": 0})
+        if not k or tahap not in TAHAP:
+            raise HTTPException(404, "Konten/tahap tidak ditemukan.")
+        if tahap == "TASHIH" and not k.get("tashih"):
+            raise HTTPException(400, "Isi nama guru yang mentashih dulu.")
+        await _tandai(k, tahap, user, payload.catatan.strip())
+        return (await _hiasi([await db.konten.find_one({"id": kid}, {"_id": 0})]))[0]
+
+    @router.post("/{kid}/revisi")
+    async def minta_revisi(kid: str, payload: AksiIn, user: dict = Depends(get_current_user)):
+        """Approval ditolak: tugas Produksi dibuka lagi (status Revisi + catatan, tenggat besok) dan PIC-nya diberi kabar."""
+        k = await db.konten.find_one({"id": kid}, {"_id": 0})
+        if not k:
+            raise HTTPException(404, "Konten tidak ditemukan.")
+        if not await _boleh_tahap(k, "APPROVAL", user):
+            raise HTTPException(403, "Hanya PIC Approval, kepala tim, atau SPV.")
+        if len(payload.catatan.strip()) < 3:
+            raise HTTPException(400, "Tulis apa yang perlu diperbaiki.")
+        tid = (k.get("task_ids") or {}).get("PRODUKSI")
+        t = await db.tasks.find_one({"id": tid}, {"_id": 0}) if tid else None
+        if not t:
+            raise HTTPException(400, "Tugas Produksi tidak ditemukan.")
+        besok = (date.today() + timedelta(days=1)).isoformat()
+        upd = {"status": "REVISI", "selesai_at": None, "revisi_catatan": payload.catatan.strip(), "revisi_at": _now(),
+               "deadline": max(besok, t.get("deadline") or besok), "updated_at": _now()}
+        await srv._sync_status_list(t, upd)
+        await db.tasks.update_one({"id": tid}, {"$set": upd, "$inc": {"revisi_count": 1}})
+        await srv._log_activity(tid, user, "revisi", payload.catatan.strip())
+        return (await _hiasi([await db.konten.find_one({"id": kid}, {"_id": 0})]))[0]
 
     @router.put("/{kid}")
     async def ubah(kid: str, payload: KontenUpd, user: dict = Depends(get_current_user)):
@@ -302,12 +375,14 @@ def build_konten_router(srv) -> APIRouter:
         k = await db.konten.find_one({"id": kid}, {"_id": 0})
         if not k:
             raise HTTPException(404, "Konten tidak ditemukan.")
+        if not await _boleh_tahap(k, "TASHIH", user):
+            raise HTTPException(403, "Tashih dicatat oleh PIC Tashih (atau kepala tim/SPV).")
+        sebelum = await _tahap_terbuka_sebelum(k, "TASHIH")
+        if sebelum:
+            raise HTTPException(400, f"Selesaikan dulu tahap {LABEL[sebelum]}.")
         await db.konten.update_one({"id": kid}, {"$set": {"tashih": {"guru": payload.guru.strip(), "catatan": payload.catatan.strip(),
                                                                        "oleh": user.get("name"), "at": _now()}}})
-        tid = (k.get("task_ids") or {}).get("TASHIH")
-        if tid:
-            await srv.add_comment(tid, srv.CommentPayload(text=f"Ditashih oleh {payload.guru.strip()}. {payload.catatan.strip()}".strip()), user)
-        await _selesaikan(k, "TASHIH", user)
+        await _tandai(k, "TASHIH", user, f"ditashih oleh {payload.guru.strip()}" + (f". {payload.catatan.strip()}" if payload.catatan.strip() else ""))
         return (await _hiasi([await db.konten.find_one({"id": kid}, {"_id": 0})]))[0]
 
     @router.get("/jadwal/pratinjau")

@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
-import { formatApiErr } from "@/lib/AuthContext";
+import { formatApiErr, useAuth } from "@/lib/AuthContext";
 import { api, listAnggota } from "@/lib/api";
 
 const K = {
@@ -15,6 +15,8 @@ const K = {
   buat: (p) => api.post("/konten", p).then((r) => r.data),
   ubah: (id, p) => api.put(`/konten/${id}`, p).then((r) => r.data),
   tashih: (id, p) => api.post(`/konten/${id}/tashih`, p).then((r) => r.data),
+  selesai: (id, tahap, catatan = "") => api.post(`/konten/${id}/tahap/${tahap}/selesai`, { catatan }).then((r) => r.data),
+  revisi: (id, catatan) => api.post(`/konten/${id}/revisi`, { catatan }).then((r) => r.data),
   batal: (id) => api.post(`/konten/${id}/batal`).then((r) => r.data),
   atur: (p) => api.put("/konten/pengaturan/tahap", p).then((r) => r.data),
   pratinjau: (t) => api.get("/konten/jadwal/pratinjau", { params: { tanggal_tayang: t } }).then((r) => r.data),
@@ -104,6 +106,8 @@ export default function Konten() {
           <Button size="sm" onClick={() => setDlg("baru")} className="h-8 bg-emerald-900 text-xs text-white hover:bg-emerald-800" data-testid="konten-baru"><Plus size={13} /> Konten baru</Button>
         </>}
       </div>
+
+      <PanduanPeran meta={meta} />
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex rounded-lg border border-emerald-200 bg-white p-1">
@@ -316,22 +320,12 @@ function DetailKonten({ k, meta, onClose, onSaved }) {
                   </li>
                 ))}
               </ul>
-              <p className="border-t border-emerald-50 px-3 py-1.5 text-[10px] text-emerald-800/50">Tandai selesai dari menu Tugas (Untuk saya). Tahap Tashih & Posting juga bisa diselesaikan di sini.</p>
+              <p className="border-t border-emerald-50 px-3 py-1.5 text-[10px] text-emerald-800/50">Tahap berjalan berurutan. Selesaikan lewat tombol aksi di bawah, atau tandai Selesai di menu Tugas.</p>
             </section>
           )}
 
-          {aktif && (k.tahap === "TASHIH" || !k.tashih) && k.tahapan.some((t) => t.tahap === "TASHIH") && (
-            <section className="rounded-lg border border-amber-200 bg-amber-50/50 p-3">
-              <p className="text-xs font-semibold text-amber-900">Tashih guru</p>
-              {k.tashih ? <p className="mt-1 text-xs">Ditashih oleh <b>{k.tashih.guru}</b>.</p> : (
-                <div className="mt-2 flex gap-2">
-                  <Input value={guru} onChange={(e) => setGuru(e.target.value)} placeholder="Nama guru yang mentashih" className="h-9 bg-white text-xs" data-testid="kt-guru" />
-                  <Button size="sm" disabled={busy || guru.trim().length < 2} onClick={() => jalan(() => K.tashih(k.id, { guru }), "Tashih tercatat")} className="h-9 bg-emerald-900 text-xs text-white">Sudah ditashih</Button>
-                </div>
-              )}
-            </section>
-          )}
-          {k.tashih && <p className="text-xs text-emerald-800/80">Tashih: <b>{k.tashih.guru}</b>{k.tashih.catatan ? ` — ${k.tashih.catatan}` : ""}</p>}
+          {aktif && <AksiTahap k={k} meta={meta} busy={busy} jalan={jalan} guru={guru} setGuru={setGuru} />}
+          {k.tashih && <p className="text-xs text-emerald-800/80">Tashih: <b>{k.tashih.guru}</b>{k.tashih.catatan ? ` — ${k.tashih.catatan}` : ""} <span className="text-emerald-800/50">(dicatat {k.tashih.oleh})</span></p>}
 
           <section className="space-y-2">
             <p className="text-xs font-semibold text-emerald-900">Link tayang per platform</p>
@@ -525,5 +519,94 @@ function Performa({ bulan, onBuka }) {
         <TabelRekap judul="Per bucket" rows={d.bucket} />
       </div>
     </div>
+  );
+}
+
+// Tombol aksi untuk tahap yang sedang berjalan. Hanya PIC tahap itu, kepala tim, atau SPV yang bisa menekannya.
+const AKSI = {
+  NASKAH: { judul: "Naskah", cara: "Tulis naskah, caption & CTA di Google Doc, tempel link naskah di Detail konten, lalu kirim ke tashih.", tombol: "Naskah selesai → kirim ke tashih" },
+  TASHIH: { judul: "Tashih guru", cara: "Kirim naskah ke guru (WA/Doc). Setelah guru menyetujui, catat namanya di sini." },
+  PRODUKSI: { judul: "Produksi & edit", cara: "Shooting/desain + editing sesuai naskah yang sudah ditashih. Simpan hasil di Drive, tempel linknya di catatan, lalu kirim ke approval.", tombol: "Hasil siap → kirim ke approval" },
+  APPROVAL: { judul: "Approval", cara: "Cek hasil: materi sesuai tashih, subtitle & teks Arab benar, cover, caption, CTA. Setujui bila siap tayang, atau minta revisi ke editor." },
+  POSTING: { judul: "Posting", cara: "Posting/jadwalkan di semua platform tujuan, tempel link tiap platform di bawah. Semua link terisi = tahap selesai otomatis.", tombol: "Sudah diposting semua" },
+  LAPORAN: { judul: "Laporan 72 jam", cara: "72 jam setelah tayang, isi angka performa tiap platform di bagian Performa. Semua platform terisi = selesai otomatis.", tombol: "Laporan selesai" },
+};
+
+function AksiTahap({ k, meta, busy, jalan, guru, setGuru }) {
+  const { user } = useAuth();
+  const [catatan, setCatatan] = useState("");
+  const [modeRevisi, setModeRevisi] = useState(false);
+  const cur = k.tahapan.find((t) => t.tahap === k.tahap);
+  if (!cur) return null;
+  const a = AKSI[cur.tahap];
+  const boleh = meta.bisa_kelola || (user?.anggota_id && cur.pic_id === user.anggota_id);
+  return (
+    <section className={`rounded-lg border p-3 ${cur.telat ? "border-red-200 bg-red-50/40" : "border-emerald-200 bg-emerald-50/50"}`} data-testid="kt-aksi">
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        <p className="text-xs font-semibold text-emerald-950">Sekarang: {a.judul}</p>
+        <span className="text-[11px] text-emerald-800/70">PIC {cur.pic_nama || "-"} · tenggat {tglPendek(cur.deadline)}{cur.telat && <b className="text-red-600"> · terlambat</b>}</span>
+      </div>
+      <p className="mt-1 text-[11px] leading-relaxed text-emerald-900/80">{a.cara}</p>
+      {cur.revisi_catatan && <p className="mt-2 rounded bg-red-100 px-2 py-1 text-[11px] text-red-800"><b>Revisi dari approval:</b> {cur.revisi_catatan}</p>}
+      {!boleh ? (
+        <p className="mt-2 text-[11px] font-medium text-amber-800">Menunggu {cur.pic_nama || "PIC"} menyelesaikan tahap ini.</p>
+      ) : cur.tahap === "TASHIH" ? (
+        <div className="mt-2 flex gap-2">
+          <Input value={guru} onChange={(e) => setGuru(e.target.value)} placeholder="Nama guru yang mentashih" className="h-9 bg-white text-xs" data-testid="kt-guru" />
+          <Button size="sm" disabled={busy || guru.trim().length < 2} onClick={() => jalan(() => K.tashih(k.id, { guru }), "Tashih tercatat — lanjut ke Produksi")} className="h-9 shrink-0 bg-emerald-900 text-xs text-white">Sudah ditashih</Button>
+        </div>
+      ) : cur.tahap === "APPROVAL" ? (
+        modeRevisi ? (
+          <div className="mt-2 space-y-2">
+            <Textarea rows={2} value={catatan} onChange={(e) => setCatatan(e.target.value)} placeholder="Apa yang perlu diperbaiki editor? (wajib)" className="bg-white text-xs" data-testid="kt-revisi-catatan" />
+            <div className="flex gap-2">
+              <Button size="sm" disabled={busy || catatan.trim().length < 3} onClick={() => jalan(() => K.revisi(k.id, catatan), "Dikembalikan ke Produksi untuk revisi").then(() => { setModeRevisi(false); setCatatan(""); })} className="bg-red-600 text-xs text-white hover:bg-red-700" data-testid="kt-revisi-kirim">Kirim revisi</Button>
+              <Button size="sm" variant="ghost" onClick={() => setModeRevisi(false)} className="text-xs">Batal</Button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button size="sm" disabled={busy} onClick={() => jalan(() => K.selesai(k.id, "APPROVAL"), "Disetujui — lanjut ke Posting")} className="bg-emerald-900 text-xs text-white hover:bg-emerald-800" data-testid="kt-setujui">Setujui → lanjut posting</Button>
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => setModeRevisi(true)} className="border-red-200 text-xs text-red-700 hover:bg-red-50" data-testid="kt-minta-revisi">Minta revisi</Button>
+          </div>
+        )
+      ) : (
+        <div className="mt-2 space-y-2">
+          {cur.tahap === "PRODUKSI" && <Input value={catatan} onChange={(e) => setCatatan(e.target.value)} placeholder="Link hasil di Drive / catatan untuk approval (opsional)" className="h-8 bg-white text-xs" />}
+          {cur.tahap === "NASKAH" && !k.naskah_url && <p className="text-[11px] text-amber-700">Link naskah belum diisi (isi di Detail konten di bawah).</p>}
+          <Button size="sm" disabled={busy} onClick={() => jalan(() => K.selesai(k.id, cur.tahap, catatan), `${a.judul} selesai`).then(() => setCatatan(""))} className="bg-emerald-900 text-xs text-white hover:bg-emerald-800" data-testid={`kt-selesai-${cur.tahap}`}>{a.tombol}</Button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function PanduanPeran({ meta }) {
+  const [buka, setBuka] = useState(() => { try { return localStorage.getItem("ws_konten_panduan") !== "0"; } catch { return true; } });
+  const toggle = () => { setBuka(!buka); try { localStorage.setItem("ws_konten_panduan", buka ? "0" : "1"); } catch { /* abaikan */ } };
+  const pic = (t) => meta.tahap.find((x) => x.k === t)?.pic_nama || "-";
+  const baris = [
+    { siapa: pic("NASKAH"), peran: "Leader · strategi konten · penanggung jawab akhir", tugas: ["Buat kartu konten (judul, tanggal tayang, platform, brief)", "Naskah: tulis, tempel link, klik Naskah selesai", "Tashih: kirim ke guru, catat nama guru", "Approval: Setujui atau Minta revisi", "Pantau Pipeline & Pusat Kendali tiap hari"] },
+    { siapa: pic("PRODUKSI"), peran: "Eksekutor · editor video · desain · shooting", tugas: ["Buka Tugas › Untuk saya: tugas Produksi muncul otomatis", "Kerjakan sesuai naskah yang sudah ditashih", "Klik Hasil siap → kirim ke approval", "Bila ada revisi: perbaiki sesuai catatan, kirim lagi"] },
+    { siapa: pic("POSTING"), peran: "SMM · publisher · relasi & KOL", tugas: ["Posting setelah Approval disetujui", "Tempel link tiap platform → Posting selesai otomatis", "72 jam kemudian isi Performa → Laporan selesai otomatis"] },
+  ];
+  return (
+    <section className="rounded-xl border border-emerald-100 bg-white" data-testid="konten-panduan">
+      <button onClick={toggle} className="flex w-full items-center justify-between px-4 py-2 text-left text-sm font-semibold text-emerald-950">
+        Siapa melakukan apa <span className="text-xs font-normal text-emerald-700">{buka ? "Tutup" : "Buka"}</span>
+      </button>
+      {buka && (
+        <div className="grid gap-3 border-t border-emerald-50 p-4 md:grid-cols-3">
+          {baris.map((b) => (
+            <div key={b.siapa + b.peran} className="rounded-lg bg-emerald-50/50 p-3">
+              <p className="text-sm font-semibold text-emerald-950">{b.siapa}</p>
+              <p className="text-[11px] text-emerald-800/70">{b.peran}</p>
+              <ol className="mt-2 list-decimal space-y-0.5 pl-4 text-[11px] text-emerald-900">{b.tugas.map((t) => <li key={t}>{t}</li>)}</ol>
+            </div>
+          ))}
+          <p className="text-[11px] text-emerald-800/70 md:col-span-3">Alur: Naskah → Tashih → Produksi → Approval → Posting → Laporan. Tahap harus berurutan; tahap berikutnya baru bisa diselesaikan setelah tahap sebelumnya selesai. Semua tugas juga muncul di menu Tugas masing-masing.</p>
+        </div>
+      )}
+    </section>
   );
 }
