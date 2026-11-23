@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { formatApiErr, useAuth } from "@/lib/AuthContext";
 import { api, listAnggota } from "@/lib/api";
+import { PaketBaru, DetailPaket, KANAL_WARNA } from "./konten/Paket";
 
 const K = {
   meta: () => api.get("/konten/meta").then((r) => r.data),
@@ -26,6 +27,11 @@ const K = {
 };
 const KOLOM = ["NASKAH", "TASHIH", "PRODUKSI", "APPROVAL", "POSTING", "LAPORAN", "SELESAI"];
 const KOLOM_LABEL = { NASKAH: "Naskah", TASHIH: "Tashih guru", PRODUKSI: "Produksi & edit", APPROVAL: "Approval", POSTING: "Posting", LAPORAN: "Laporan 72 jam", SELESAI: "Selesai" };
+// Kanal teks memakai 3 tahap; dipetakan ke kolom pipeline yang setara.
+const KOLOM_TEKS = { COPY: "NASKAH", REVIEW: "APPROVAL", POSTING: "POSTING" };
+const kolomOf = (k) => (k.kanal && KOLOM_TEKS[k.tahap]) || k.tahap;
+const KANAL = [["", "Semua"], ["VIDEO", "Video & Feed"], ["THREADS", "Threads"], ["STORY", "IG Story"], ["WA", "WA Channel"]];
+const kanalOf = (k) => k.kanal || "VIDEO";
 const PLAT = { IG: "IG", TIKTOK: "TikTok", SHORT: "Short", YT: "YouTube" };
 const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const tglPendek = (s) => (s ? new Date(`${s}T00:00:00`).toLocaleDateString("id-ID", { weekday: "short", day: "numeric", month: "short" }) : "—");
@@ -43,6 +49,20 @@ function Titik({ tahapan }) {
 
 function Kartu({ k, onBuka }) {
   const kini = k.tahapan.find((t) => t.tahap === k.tahap);
+  if (k.kanal) return (
+    <button onClick={() => onBuka(k)} className={`w-full rounded-lg border bg-white p-2.5 text-left shadow-sm hover:border-emerald-300 ${k.terlambat ? "border-red-200" : "border-emerald-100"}`} data-testid={`konten-${k.kode}`}>
+      <div className="flex items-center justify-between gap-2 text-[10px] text-emerald-800/60">
+        <span className={`rounded px-1.5 py-px font-semibold ${KANAL_WARNA[k.kanal]}`}>{k.kanal === "STORY" ? "IG Story" : k.kanal === "WA" ? "WA Channel" : "Threads"}</span>
+        <span className="font-mono">{k.kode}</span>
+      </div>
+      <p className="mt-1 line-clamp-2 text-sm font-medium leading-snug text-emerald-950">{k.judul.replace(/^[^·]+·\s*/, "")}</p>
+      <div className="mt-1.5"><Titik tahapan={k.tahapan} /></div>
+      <div className="mt-1.5 flex items-center gap-1 text-[10px]">
+        <span className={k.post_telat ? "font-semibold text-red-600" : "text-emerald-800/70"}>{k.post_diposting}/{k.post_jumlah} tayang{k.post_telat ? ` · ${k.post_telat} lewat jam` : ""}</span>
+        {kini && <span className="ml-auto text-emerald-800/70">{kini.pic_nama || "-"}</span>}
+      </div>
+    </button>
+  );
   return (
     <button onClick={() => onBuka(k)} className={`w-full rounded-lg border bg-white p-2.5 text-left shadow-sm hover:border-emerald-300 ${k.terlambat ? "border-red-200" : "border-emerald-100"}`} data-testid={`konten-${k.kode}`}>
       <div className="flex items-center justify-between gap-2 text-[10px] text-emerald-800/60">
@@ -66,6 +86,7 @@ export default function Konten() {
   const [bulan, setBulan] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
   const [arsip, setArsip] = useState(false);
   const [q, setQ] = useState("");
+  const [kanal, setKanal] = useState("");
   const [buka, setBuka] = useState(null);
   const [dlg, setDlg] = useState(null); // baru | impor | atur
   const [anggota, setAnggota] = useState([]);
@@ -86,8 +107,8 @@ export default function Konten() {
 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
-    return (rows || []).filter((k) => !s || `${k.kode} ${k.judul} ${k.pilar}`.toLowerCase().includes(s));
-  }, [rows, q]);
+    return (rows || []).filter((k) => (!kanal || kanalOf(k) === kanal) && (!s || `${k.kode} ${k.judul} ${k.pilar || ""}`.toLowerCase().includes(s)));
+  }, [rows, q, kanal]);
   const telat = (rows || []).filter((k) => k.terlambat).length;
 
   if (!meta) return <div className="grid place-items-center p-12"><Loader2 className="animate-spin text-emerald-800" /></div>;
@@ -97,7 +118,7 @@ export default function Konten() {
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-emerald-100 bg-white px-4 py-3">
         <div className="min-w-0 flex-1">
           <h3 className="font-display text-lg font-semibold text-emerald-950">Produksi Konten</h3>
-          <p className="text-xs text-emerald-800/70">Satu konten = satu kartu. Tiap tahap otomatis jadi tugas PIC dengan deadline mundur dari tanggal tayang.
+          <p className="text-xs text-emerald-800/70">Video & Feed: satu konten = satu kartu, 6 tahap. Threads, IG Story, WA Channel: satu paket per pekan, 3 tahap. Tiap tahap otomatis jadi tugas PIC.
             {telat > 0 && <b className="ml-1 text-red-600">{telat} konten terlambat.</b>}</p>
         </div>
         {meta.bisa_kelola && <>
@@ -123,6 +144,13 @@ export default function Konten() {
             <Button size="sm" variant="outline" className="h-8 w-8 p-0" onClick={() => setBulan(new Date(bulan.getFullYear(), bulan.getMonth() + 1, 1))}><ChevronRight size={14} /></Button>
           </div>
         )}
+        {view !== "performa" && (
+          <div className="flex flex-wrap gap-1" data-testid="konten-kanal">
+            {KANAL.map(([k, l]) => (
+              <button key={k} onClick={() => setKanal(k)} className={`rounded-full border px-2.5 py-0.5 text-[11px] ${kanal === k ? "border-emerald-800 bg-emerald-800 text-white" : "border-emerald-200 bg-white text-emerald-900"}`}>{l}</button>
+            ))}
+          </div>
+        )}
         {view === "daftar" && <label className="flex items-center gap-1.5 text-xs text-emerald-900"><input type="checkbox" checked={arsip} onChange={(e) => setArsip(e.target.checked)} /> Tampilkan arsip</label>}
         <div className="relative ml-auto w-full sm:w-56">
           <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-emerald-700/60" />
@@ -136,7 +164,8 @@ export default function Konten() {
         : view === "kalender" ? <Kalender rows={filtered} bulan={bulan} onBuka={setBuka} />
         : <Daftar rows={filtered} onBuka={setBuka} />}
 
-      <DetailKonten k={buka} meta={meta} onClose={() => setBuka(null)} onSaved={segar} />
+      {buka?.kanal ? <DetailPaket k={buka} meta={meta} onClose={() => setBuka(null)} onSaved={segar} />
+        : <DetailKonten k={buka} meta={meta} onClose={() => setBuka(null)} onSaved={segar} />}
       {dlg === "baru" && <BaruDialog meta={meta} onClose={() => setDlg(null)} onSaved={(k) => { setDlg(null); segar(k); }} />}
       {dlg === "impor" && <ImporDialog onClose={() => setDlg(null)} onSaved={() => { setDlg(null); load(); }} />}
       {dlg === "atur" && <AturDialog meta={meta} anggota={anggota.filter((a) => !meta.divisi_id || a.divisi_id === meta.divisi_id)} onClose={() => setDlg(null)} onSaved={(m) => { setMeta(m); setDlg(null); }} />}
@@ -148,7 +177,7 @@ function Pipeline({ rows, onBuka }) {
   return (
     <div className="-mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto px-1 pb-2" data-testid="konten-pipeline">
       {KOLOM.map((c) => {
-        const list = rows.filter((k) => k.tahap === c);
+        const list = rows.filter((k) => kolomOf(k) === c);
         return (
           <section key={c} className="flex w-[78vw] shrink-0 snap-start flex-col rounded-xl border border-emerald-100 bg-emerald-50/40 sm:w-64">
             <header className="flex items-center gap-2 px-3 py-2">
@@ -178,7 +207,8 @@ function Kalender({ rows, bulan, onBuka }) {
         {["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Ahad"].map((h) => <div key={h} className="border-b border-emerald-50 px-2 py-1.5 text-[11px] font-semibold text-emerald-800/70">{h}</div>)}
         {sel.map((d, i) => {
           const t = d ? ymd(new Date(y, m, d)) : null;
-          const isi = t ? rows.filter((k) => k.tanggal_tayang === t) : [];
+          const isi = t ? rows.filter((k) => !k.kanal && k.tanggal_tayang === t) : [];
+          const paket = t ? rows.filter((k) => k.kanal).map((k) => [k, (k.posts || []).filter((p) => p.tanggal === t)]).filter(([, ps]) => ps.length) : [];
           return (
             <div key={i} className={`min-h-[96px] border-b border-r border-emerald-50 p-1 ${t === hariIni ? "bg-emerald-50/60" : ""}`}>
               {d && <p className={`mb-1 text-[11px] font-semibold ${t === hariIni ? "text-emerald-900" : "text-emerald-800/50"}`}>{d}</p>}
@@ -187,6 +217,13 @@ function Kalender({ rows, bulan, onBuka }) {
                   <button key={k.id} onClick={() => onBuka(k)} title={`${k.kode} · ${k.tahap_label}`}
                     className={`block w-full truncate rounded px-1.5 py-0.5 text-left text-[10px] font-medium ${k.tahap === "ARSIP" || k.tahap === "SELESAI" ? "bg-emerald-100 text-emerald-900" : k.terlambat ? "bg-red-100 text-red-800" : "bg-amber-50 text-amber-900"}`}>
                     {k.judul}
+                  </button>
+                ))}
+                {paket.map(([k, ps]) => (
+                  <button key={k.id} onClick={() => onBuka(k)} title={`${k.kode} · ${ps.map((p) => `${p.jam} ${p.hook || p.topik || p.isi || ""}`.slice(0, 60)).join("\n")}`}
+                    className={`flex w-full items-center justify-between rounded px-1.5 py-0.5 text-left text-[10px] font-medium ${KANAL_WARNA[k.kanal]}`}>
+                    <span className="truncate">{k.kanal === "STORY" ? "Story" : k.kanal === "WA" ? "WA" : "Threads"}</span>
+                    <span className="tabular-nums">{ps.filter((p) => p.diposting).length}/{ps.length}</span>
                   </button>
                 ))}
               </div>
@@ -203,19 +240,20 @@ function Daftar({ rows, onBuka }) {
     <div className="overflow-x-auto rounded-xl border border-emerald-100 bg-white" data-testid="konten-daftar">
       <table className="w-full min-w-[760px] text-sm">
         <thead className="bg-emerald-50/60 text-left text-[11px] uppercase tracking-wide text-emerald-800/70">
-          <tr><th className="px-3 py-2">Kode</th><th className="px-3 py-2">Judul</th><th className="px-3 py-2">Tayang</th><th className="px-3 py-2">Tahap</th><th className="px-3 py-2">Progres</th><th className="px-3 py-2">Pilar · Format</th><th className="px-3 py-2">Platform</th></tr>
+          <tr><th className="px-3 py-2">Kode</th><th className="px-3 py-2">Kanal</th><th className="px-3 py-2">Judul</th><th className="px-3 py-2">Tayang</th><th className="px-3 py-2">Tahap</th><th className="px-3 py-2">Progres</th><th className="px-3 py-2">Pilar · Format</th><th className="px-3 py-2">Platform</th></tr>
         </thead>
         <tbody>
-          {rows.length === 0 && <tr><td colSpan={7} className="px-3 py-6 text-center text-xs text-emerald-800/60">Belum ada konten.</td></tr>}
+          {rows.length === 0 && <tr><td colSpan={8} className="px-3 py-6 text-center text-xs text-emerald-800/60">Belum ada konten.</td></tr>}
           {rows.map((k) => (
             <tr key={k.id} onClick={() => onBuka(k)} className="cursor-pointer border-t border-emerald-50 hover:bg-emerald-50/40">
               <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-emerald-800/70">{k.kode}</td>
+              <td className="px-3 py-2"><span className={`whitespace-nowrap rounded px-1.5 py-px text-[10px] font-semibold ${KANAL_WARNA[kanalOf(k)]}`}>{KANAL.find(([x]) => x === kanalOf(k))[1]}</span></td>
               <td className="max-w-[280px] truncate px-3 py-2 font-medium text-emerald-950">{k.judul}</td>
               <td className="whitespace-nowrap px-3 py-2 text-xs">{tglPendek(k.tanggal_tayang)}</td>
               <td className={`whitespace-nowrap px-3 py-2 text-xs ${k.terlambat ? "font-semibold text-red-600" : "text-emerald-900"}`}>{k.tahap_label}</td>
               <td className="w-28 px-3 py-2">{k.tahapan.length ? <Titik tahapan={k.tahapan} /> : <span className="text-[10px] text-emerald-800/40">arsip</span>}</td>
               <td className="whitespace-nowrap px-3 py-2 text-xs text-emerald-800/70">{[k.pilar, k.format].filter(Boolean).join(" · ") || "—"}</td>
-              <td className="whitespace-nowrap px-3 py-2 text-xs">{(k.platforms || []).map((p) => PLAT[p]).join(", ")}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-xs">{k.kanal ? `${k.post_jumlah} post` : (k.platforms || []).map((p) => PLAT[p]).join(", ")}</td>
             </tr>
           ))}
         </tbody>
@@ -261,6 +299,7 @@ function BaruDialog({ meta, onClose, onSaved }) {
   const [f, setF] = useState({ judul: "", tanggal_tayang: ymd(besok), format: "Reels", platforms: ["IG", "TIKTOK", "SHORT"], pilar: "", bucket: "VALUE", funnel: "", cta_keyword: "", naskah_url: "", brief: "" });
   const [busy, setBusy] = useState(false);
   const [pv, setPv] = useState(null);
+  const [kanal, setKanal] = useState(null);
   useEffect(() => { if (!f.tanggal_tayang) return; K.pratinjau(f.tanggal_tayang).then(setPv).catch(() => setPv(null)); }, [f.tanggal_tayang]);
   const simpan = async () => {
     setBusy(true);
@@ -270,16 +309,30 @@ function BaruDialog({ meta, onClose, onSaved }) {
   };
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto" data-testid="konten-baru-dialog">
-        <DialogHeader><DialogTitle className="font-display text-lg">Konten baru</DialogTitle>
-          <DialogDescription className="text-emerald-800/70">Tugas tiap tahap dibuat otomatis untuk PIC dengan deadline mundur dari tanggal tayang.</DialogDescription></DialogHeader>
+      <DialogContent className={`max-h-[90vh] overflow-y-auto ${kanal && kanal !== "VIDEO" ? "max-w-2xl" : "max-w-lg"}`} data-testid="konten-baru-dialog">
+        <DialogHeader><DialogTitle className="font-display text-lg">{!kanal ? "Konten baru — pilih kanal" : kanal === "VIDEO" ? "Konten baru · Video & Feed" : `Paket mingguan · ${meta.kanal_teks[kanal].label}`}</DialogTitle>
+          <DialogDescription className="text-emerald-800/70">{!kanal ? "Kanal menentukan isian dan alur kerjanya." : kanal === "VIDEO" ? "Tugas tiap tahap dibuat otomatis untuk PIC dengan deadline mundur dari tanggal tayang." : "Satu paket = semua post kanal ini selama satu pekan. Ditulis, direview sekali, lalu diposting harian."}</DialogDescription></DialogHeader>
+        {!kanal ? (
+          <div className="grid gap-2 sm:grid-cols-2" data-testid="kt-pilih-kanal">
+            {[["VIDEO", "Video & Feed", "Reels, carousel, TikTok, Short, YouTube", "Naskah → Tashih → Produksi → Approval → Posting → Laporan"],
+              ...Object.entries(meta.kanal_teks).map(([kk, v]) => [kk, v.label, `${v.slot.length}× sehari · ${v.field.map((x) => x[1]).slice(0, 4).join(", ")}`, "Tulis copy → Review → Posting harian"])].map(([kk, l, d, alur]) => (
+              <button key={kk} onClick={() => setKanal(kk)} className="rounded-xl border border-emerald-200 p-3 text-left hover:border-emerald-500 hover:bg-emerald-50/50" data-testid={`kt-kanal-${kk}`}>
+                <span className={`rounded px-1.5 py-px text-[10px] font-semibold ${KANAL_WARNA[kk]}`}>{kk === "VIDEO" ? "per konten" : "per pekan"}</span>
+                <p className="mt-1 text-sm font-semibold text-emerald-950">{l}</p>
+                <p className="text-[11px] text-emerald-800/70">{d}</p>
+                <p className="mt-1 text-[10px] text-emerald-800/50">{alur}</p>
+              </button>
+            ))}
+          </div>
+        ) : kanal !== "VIDEO" ? <PaketBaru meta={meta} kanal={kanal} onSaved={onSaved} onBack={() => setKanal(null)} /> : <>
         <FormFields f={f} setF={setF} meta={meta} />
         <div className={`rounded-lg p-2.5 text-[11px] ${pv?.dipadatkan ? "border border-amber-300 bg-amber-50 text-amber-950" : "bg-emerald-50/60 text-emerald-900"}`} data-testid="kt-jadwal">
           {pv?.dipadatkan && <p className="mb-1 font-semibold"><AlertTriangle size={11} className="mb-0.5 mr-1 inline" />Tanggal tayang kurang dari {pv.minimal_hari} hari lagi — jadwal tahap dipadatkan mulai hari ini. Pastikan tim sanggup, atau mundurkan tanggal tayang.</p>}
           {meta.tahap.map((t) => <p key={t.k}><b>{t.label}</b> — {t.pic_nama || "PIC belum diatur"} · {pv ? tglPendek(pv.deadline[t.k]) : "-"}</p>)}
         </div>
-        <DialogFooter><Button variant="outline" onClick={onClose}>Batal</Button>
+        <DialogFooter><Button variant="outline" onClick={() => setKanal(null)}>Kembali</Button>
           <Button onClick={simpan} disabled={busy || !f.judul.trim()} className="bg-emerald-900 text-white hover:bg-emerald-800" data-testid="kt-simpan">{busy && <Loader2 size={14} className="animate-spin" />} Buat konten</Button></DialogFooter>
+        </>}
       </DialogContent>
     </Dialog>
   );
@@ -371,14 +424,15 @@ function ImporDialog({ onClose, onSaved }) {
     <Dialog open onOpenChange={(v) => !v && (hasil ? onSaved() : onClose())}>
       <DialogContent className="max-w-md" data-testid="konten-impor-dialog">
         <DialogHeader><DialogTitle className="font-display text-lg">Impor dari spreadsheet</DialogTitle>
-          <DialogDescription className="text-emerald-800/70">Buka spreadsheet Content Calendar → tab <b>jadwal konten</b> → File → Download → CSV. Unggah file itu di sini.</DialogDescription></DialogHeader>
+          <DialogDescription className="text-emerald-800/70">Buka spreadsheet Content Calendar → pilih tab → File → Download → CSV. Unggah file itu di sini. Tab dikenali otomatis: <b>jadwal konten</b>, <b>Threads</b>, <b>SG</b>, <b>WA Channel</b>.</DialogDescription></DialogHeader>
         <ul className="list-disc space-y-0.5 pl-4 text-[11px] text-emerald-900/80">
+          <li>Threads / SG / WA Channel: post dikelompokkan per pekan jadi paket. Pekan lalu → arsip (beserta angka insight); pekan ini & depan → paket aktif + tugas.</li>
           <li>Konten yang sudah posted (atau lebih dari 14 hari lalu) masuk <b>arsip</b> beserta link-nya.</li>
           <li>Konten yang belum tayang jadi <b>konten aktif</b> + tugas otomatis; tahap yang sudah lewat (mis. scripted) ditandai selesai.</li>
           <li>Kode RS-xxx yang sudah ada dilewati, jadi aman diimpor ulang.</li>
         </ul>
         <input type="file" accept=".csv,text/csv" onChange={(e) => setFile(e.target.files?.[0] || null)} className="text-sm" data-testid="konten-impor-file" />
-        {hasil && <p className="rounded bg-emerald-50 p-2 text-xs text-emerald-900">Arsip {hasil.arsip} · aktif {hasil.aktif} · dilewati {hasil.lewati}{hasil.gagal.length ? ` · gagal: ${hasil.gagal.join("; ")}` : ""}</p>}
+        {hasil && <p className="rounded bg-emerald-50 p-2 text-xs text-emerald-900">{hasil.kanal ? `${hasil.kanal}: ${hasil.post} post · ` : ""}Arsip {hasil.arsip} · aktif {hasil.aktif} · dilewati {hasil.lewati}{hasil.gagal.length ? ` · gagal: ${hasil.gagal.join("; ")}` : ""}</p>}
         <DialogFooter><Button variant="outline" onClick={() => (hasil ? onSaved() : onClose())}>{hasil ? "Tutup" : "Batal"}</Button>
           {!hasil && <Button onClick={kirim} disabled={!file || busy} className="bg-emerald-900 text-white hover:bg-emerald-800">{busy && <Loader2 size={14} className="animate-spin" />} Impor</Button>}</DialogFooter>
       </DialogContent>
@@ -389,13 +443,14 @@ function ImporDialog({ onClose, onSaved }) {
 function AturDialog({ meta, anggota, onClose, onSaved }) {
   const [pic, setPic] = useState(Object.fromEntries(meta.tahap.map((t) => [t.k, t.pic_id || ""])));
   const [off, setOff] = useState(Object.fromEntries(meta.tahap.map((t) => [t.k, t.offset])));
+  const [teks, setTeks] = useState(Object.fromEntries(Object.entries(meta.kanal_teks).map(([kk, v]) => [kk, Object.fromEntries(Object.entries(v.pic).map(([t, x]) => [t, x.id || ""]))])));
   const simpan = async () => {
-    try { onSaved(await K.atur({ pic, offset: off })); toast.success("Pengaturan tahap disimpan (berlaku untuk konten baru)"); }
+    try { onSaved(await K.atur({ pic, offset: off, teks })); toast.success("Pengaturan tahap disimpan (berlaku untuk konten baru)"); }
     catch (e) { toast.error(formatApiErr(e)); }
   };
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-lg" data-testid="konten-atur-dialog">
+      <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto" data-testid="konten-atur-dialog">
         <DialogHeader><DialogTitle className="font-display text-lg">Tahap & PIC</DialogTitle>
           <DialogDescription className="text-emerald-800/70">Siapa mengerjakan tiap tahap dan berapa hari dari tanggal tayang (minus = sebelum tayang).</DialogDescription></DialogHeader>
         <div className="space-y-2">
@@ -406,6 +461,21 @@ function AturDialog({ meta, anggota, onClose, onSaved }) {
                 <option value="">— pilih —</option>{anggota.map((a) => <option key={a.id} value={a.id}>{a.nama}</option>)}
               </select>
               <Input type="number" value={off[t.k]} onChange={(e) => setOff({ ...off, [t.k]: Number(e.target.value) })} className="h-9 bg-white text-xs" aria-label={`Hari ${t.label}`} />
+            </div>
+          ))}
+        </div>
+        <div className="space-y-2 border-t border-emerald-50 pt-3" data-testid="atur-kanal-teks">
+          <p className="text-sm font-semibold text-emerald-950">Paket mingguan (kanal teks)</p>
+          <p className="text-[10px] text-emerald-800/60">Tulis copy tenggat H-3 dari Senin, review H-2, posting sampai post terakhir pekan itu.</p>
+          <div className="grid grid-cols-[80px_1fr_1fr_1fr] gap-1.5 text-[10px] font-medium text-emerald-800/70"><span />{meta.tahap_teks.map((t) => <span key={t.k}>{t.label}</span>)}</div>
+          {Object.entries(meta.kanal_teks).map(([kk, v]) => (
+            <div key={kk} className="grid grid-cols-[80px_1fr_1fr_1fr] items-center gap-1.5">
+              <span className="text-xs font-medium text-emerald-950">{v.label}</span>
+              {meta.tahap_teks.map((t) => (
+                <select key={t.k} value={teks[kk][t.k] || ""} onChange={(e) => setTeks({ ...teks, [kk]: { ...teks[kk], [t.k]: e.target.value } })} className="h-8 min-w-0 rounded-md border border-input bg-white px-1 text-[11px]" aria-label={`${v.label} ${t.label}`}>
+                  <option value="">—</option>{anggota.map((a) => <option key={a.id} value={a.id}>{a.nama}</option>)}
+                </select>
+              ))}
             </div>
           ))}
         </div>
@@ -494,7 +564,19 @@ function Performa({ bulan, onBuka }) {
     K.rekap({ dari: ymd(bulan), sampai: ymd(new Date(bulan.getFullYear(), bulan.getMonth() + 1, 0)) }).then(setD).catch((e) => toast.error(formatApiErr(e)));
   }, [bulan]);
   if (!d) return <div className="grid place-items-center p-12"><Loader2 className="animate-spin text-emerald-800" /></div>;
-  if (!d.jumlah_konten) return <div className="rounded-xl border border-dashed border-emerald-200 bg-white p-8 text-center text-sm text-emerald-800/70">Belum ada performa yang diisi untuk bulan ini. Isi di kartu konten → Performa 72 jam.</div>;
+  const teks = (d.kanal_teks || []).filter((x) => x.post);
+  const TabelTeks = teks.length > 0 && (
+    <section className="overflow-hidden rounded-xl border border-emerald-100 bg-white" data-testid="rekap-kanal-teks">
+      <p className="border-b border-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-950">Kanal teks (per post)</p>
+      <div className="overflow-x-auto"><table className="w-full text-xs">
+        <thead className="text-[10px] uppercase tracking-wide text-emerald-800/50"><tr><th className="px-4 py-1.5 text-left font-medium">Kanal</th><th className="px-2 text-right font-medium">Post</th><th className="px-2 text-right font-medium">Tayang</th><th className="px-2 text-right font-medium">Berdata</th><th className="px-2 text-right font-medium">Rata views</th><th className="px-2 text-right font-medium">Interaksi</th><th className="px-2 text-right font-medium">Leads</th><th className="px-4 text-right font-medium">Daftar</th></tr></thead>
+        <tbody>{teks.map((r) => (
+          <tr key={r.nama} className="border-t border-emerald-50"><td className="px-4 py-1.5 font-medium text-emerald-950">{r.nama}</td><td className="px-2 text-right tabular-nums">{r.post}</td><td className="px-2 text-right tabular-nums">{r.diposting}</td><td className="px-2 text-right tabular-nums">{r.berdata}</td>
+            <td className="px-2 text-right font-semibold tabular-nums">{fmt(r.rata_views)}</td><td className="px-2 text-right tabular-nums">{fmt(r.interaksi)}</td><td className="px-2 text-right tabular-nums">{r.leads}</td><td className="px-4 text-right tabular-nums">{r.pendaftaran}</td></tr>
+        ))}</tbody></table></div>
+    </section>
+  );
+  if (!d.jumlah_konten) return TabelTeks ? <div className="space-y-4">{TabelTeks}<p className="text-xs text-emerald-800/60">Belum ada performa video/feed bulan ini.</p></div> : <div className="rounded-xl border border-dashed border-emerald-200 bg-white p-8 text-center text-sm text-emerald-800/70">Belum ada performa yang diisi untuk bulan ini. Isi di kartu konten → Performa 72 jam.</div>;
   const Top = ({ judul, list, key2 }) => (
     <section className="overflow-hidden rounded-xl border border-emerald-100 bg-white">
       <p className="border-b border-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-950">{judul}</p>
@@ -508,6 +590,7 @@ function Performa({ bulan, onBuka }) {
   return (
     <div className="space-y-4" data-testid="konten-performa">
       <p className="text-xs text-emerald-800/70">{d.jumlah_konten} konten berdata performa bulan ini. ER = (likes + komentar + simpan + bagikan) ÷ reach.</p>
+      {TabelTeks}
       <div className="grid gap-4 lg:grid-cols-2">
         <Top judul="Views tertinggi" list={d.top_views} key2="views" />
         <Top judul="DM / pertanyaan terbanyak" list={d.top_dm} key2="dm" />
@@ -604,7 +687,8 @@ function PanduanPeran({ meta }) {
               <ol className="mt-2 list-decimal space-y-0.5 pl-4 text-[11px] text-emerald-900">{b.tugas.map((t) => <li key={t}>{t}</li>)}</ol>
             </div>
           ))}
-          <p className="text-[11px] text-emerald-800/70 md:col-span-3">Alur: Naskah → Tashih → Produksi → Approval → Posting → Laporan. Tahap harus berurutan; tahap berikutnya baru bisa diselesaikan setelah tahap sebelumnya selesai. Semua tugas juga muncul di menu Tugas masing-masing.</p>
+          <p className="text-[11px] text-emerald-800/70 md:col-span-3"><b>Threads, IG Story, WA Channel</b> dikelola per paket mingguan: penulis copy menulis semua post pekan itu → {meta.kanal_teks?.THREADS?.pic?.REVIEW?.nama || "reviewer"} mereview sekali per paket → PIC posting mencentang tiap post saat tayang. Penulis & PIC bisa diatur per kanal di Tahap & PIC.</p>
+          <p className="text-[11px] text-emerald-800/70 md:col-span-3">Alur video: Naskah → Tashih → Produksi → Approval → Posting → Laporan. Tahap harus berurutan; tahap berikutnya baru bisa diselesaikan setelah tahap sebelumnya selesai. Semua tugas juga muncul di menu Tugas masing-masing.</p>
         </div>
       )}
     </section>
