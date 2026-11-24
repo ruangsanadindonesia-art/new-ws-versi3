@@ -5,10 +5,11 @@ Autentikasi: header `Authorization: Bearer rs_live_...` (API key). Cookie sesi b
 
 Jenis kunci:
 - personal  : milik satu user, bertindak sebagai user itu (role + RACI berlaku). scope "read" atau "write".
-- gateway   : untuk Hermes bersama (satu bot, banyak orang di chat). Selalu HANYA BACA. Setiap tool butuh
-              `chat_id`; chat_id harus sudah ditautkan ke akun lewat kode sekali pakai (tool tautkan_akun).
-              Catatan: chat_id diisi oleh AI dari konteks chat, sehingga tidak bisa dijamin keasliannya —
-              karena itu gateway dibatasi baca-saja.
+- gateway   : untuk Hermes bersama (satu bot, banyak orang di chat). scope "read" atau "write" (diatur SPV).
+              Setiap tool butuh `chat_id`; chat_id harus sudah ditautkan ke akun lewat kode sekali pakai (tool tautkan_akun),
+              dan tool berjalan sebagai akun tertaut itu (role + RACI berlaku).
+              Catatan risiko: chat_id diisi oleh AI dari konteks chat sehingga tidak bisa dijamin keasliannya; dengan scope
+              write, salah/pemalsuan chat_id berarti aksi tercatat atas nama akun lain. Semua panggilan tercatat di agent_audit.
 
 Prinsip: setiap tool memanggil fungsi endpoint yang sama dengan aplikasi web, sehingga semua aturan akses
 (RBAC, RACI, alur review) tetap berlaku. Kunci write juga bisa MENGEDIT tugas (ubah_tugas) dan menjalankan alur Produksi Konten (buat/ubah/aksi/performa),
@@ -426,13 +427,13 @@ def build_mcp_router(srv) -> APIRouter:
         if not owner or owner.get("status") != "approved":
             raise HTTPException(403, "Pemilik API key tidak aktif.")
         return {"key": k, "owner": owner, "kind": k.get("kind") or "personal",
-                "scope": "read" if (k.get("kind") == "gateway") else (k.get("scope") or "read")}
+                "scope": k.get("scope") or "read"}
 
     def _tool_list(ctx: dict) -> List[dict]:
         out = []
         for name, t in TOOLS.items():
             if ctx["kind"] == "gateway":
-                if t["write"]:
+                if t["write"] and ctx["scope"] != "write":
                     continue
                 s = json.loads(json.dumps(t["schema"]))
                 if name != "tautkan_akun":

@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth, formatApiErr } from "@/lib/AuthContext";
-import { listApiKeys, createApiKey, revokeApiKey, createLinkCode, listChatLinks, deleteChatLink, agentAudit } from "@/lib/api";
+import { listApiKeys, createApiKey, revokeApiKey, ubahScopeApiKey, createLinkCode, listChatLinks, deleteChatLink, agentAudit } from "@/lib/api";
 
 const MCP_URL = "https://workspace.ruangsanad.com/api/mcp";
 const fmt = (d) => (d ? new Date(d).toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—");
@@ -50,20 +50,25 @@ function CreatedKey({ created, onClose }) {
   );
 }
 
-function KeyRow({ k, onRevoke, showOwner }) {
+function KeyRow({ k, onRevoke, showOwner, onScope }) {
   return (
     <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-100 px-3 py-2" data-testid={`api-key-${k.id}`}>
       <div className="min-w-0">
         <p className="truncate text-sm font-medium text-emerald-950">
           {k.name}
           <span className={`ml-2 rounded px-1.5 py-0.5 text-[10px] font-semibold ${k.kind === "gateway" ? "bg-sky-100 text-sky-800" : k.scope === "write" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"}`}>
-            {k.kind === "gateway" ? "Gateway · baca" : k.scope === "write" ? "Baca + tulis" : "Baca saja"}
+            {k.kind === "gateway" ? `Gateway · ${k.scope === "write" ? "baca + edit" : "baca"}` : k.scope === "write" ? "Baca + tulis/edit" : "Baca saja"}
           </span>
         </p>
         <p className="font-mono text-[11px] text-emerald-800/60">
           {k.prefix}… · {showOwner && k.owner_name ? `${k.owner_name} · ` : ""}dipakai {fmt(k.last_used_at)}{k.revoked_at ? " · dicabut" : ""}
         </p>
       </div>
+      {!k.revoked_at && onScope && (
+        <Button type="button" size="sm" variant="outline" onClick={() => onScope(k)} className="shrink-0 text-xs" data-testid={`scope-${k.id}`}>
+          {k.scope === "write" ? "Jadikan baca saja" : "Izinkan edit"}
+        </Button>
+      )}
       {!k.revoked_at && (
         <Button type="button" size="sm" variant="ghost" onClick={() => onRevoke(k)} className="text-red-700 hover:bg-red-50 hover:text-red-800" data-testid={`revoke-${k.id}`}>
           <Trash2 size={14} /> Cabut
@@ -88,6 +93,12 @@ export default function IntegrasiAI() {
   const [gwName, setGwName] = useState("Hermes bersama");
   const [confirmRevoke, setConfirmRevoke] = useState(null);
 
+  const gantiScope = async (k) => {
+    const ke = k.scope === "write" ? "read" : "write";
+    if (ke === "write" && k.kind === "gateway" && !window.confirm("Izinkan Hermes bersama mengubah data?\n\nAksi akan berjalan atas nama akun yang ditautkan ke chat. Identitas chat ditentukan oleh agent, jadi pastikan Hermes hanya dipakai di grup/chat tepercaya. Semua aksi tercatat di log.")) return;
+    try { await ubahScopeApiKey(k.id, ke); toast.success(ke === "write" ? `"${k.name}" sekarang bisa membaca + mengedit` : `"${k.name}" sekarang baca saja`); await load(); }
+    catch (e) { toast.error(formatApiErr(e)); }
+  };
   const load = async () => {
     try {
       const [k, l, a] = await Promise.all([listApiKeys(), listChatLinks(), agentAudit()]);
@@ -148,7 +159,7 @@ export default function IntegrasiAI() {
         {created && <CreatedKey created={created} onClose={() => setCreated(null)} />}
         <div className="mt-4 space-y-2">
           {keys.filter((k) => k.kind !== "gateway").length === 0 && <p className="text-xs text-emerald-800/60">Belum ada kunci aktif.</p>}
-          {keys.filter((k) => k.kind !== "gateway").map((k) => <KeyRow key={k.id} k={k} onRevoke={setConfirmRevoke} />)}
+          {keys.filter((k) => k.kind !== "gateway").map((k) => <KeyRow key={k.id} k={k} onRevoke={setConfirmRevoke} onScope={gantiScope} />)}
         </div>
       </Section>
 
@@ -177,14 +188,14 @@ export default function IntegrasiAI() {
 
       {isSpv && (
         <Section icon={ShieldAlert} title="Admin: kunci gateway & semua kunci" testId="spv-keys"
-          desc="Kunci gateway dipasang di Hermes bersama. Kunci ini hanya bisa membaca, dan hanya untuk chat yang sudah ditautkan pemiliknya. Identitas pengirim chat ditentukan oleh agent, jadi jangan pakai gateway untuk data yang sangat sensitif.">
+          desc="Kunci gateway dipasang di Hermes bersama dan hanya berlaku untuk chat yang sudah ditautkan pemiliknya; tiap aksi berjalan atas nama akun tertaut (izin RACI tetap berlaku). Default baca saja; SPV bisa mengizinkan edit. Identitas pengirim chat ditentukan oleh agent, jadi pakai hanya di chat tepercaya.">
           <div className="flex flex-col gap-2 sm:flex-row">
             <Input value={gwName} onChange={(e) => setGwName(e.target.value)} maxLength={80} data-testid="gw-name" />
             <Button type="button" onClick={() => create("gateway")} disabled={busy} variant="outline" data-testid="gw-create"><Plus size={15} /> Buat kunci gateway</Button>
           </div>
           <div className="mt-4 space-y-2">
             {allKeys.length === 0 && <p className="text-xs text-emerald-800/60">Belum ada kunci aktif di organisasi.</p>}
-            {allKeys.map((k) => <KeyRow key={k.id} k={k} onRevoke={setConfirmRevoke} showOwner />)}
+            {allKeys.map((k) => <KeyRow key={k.id} k={k} onRevoke={setConfirmRevoke} showOwner onScope={gantiScope} />)}
           </div>
         </Section>
       )}

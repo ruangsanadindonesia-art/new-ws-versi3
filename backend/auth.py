@@ -85,7 +85,7 @@ class ResetPasswordPayload(BaseModel):
 class ApiKeyCreatePayload(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     scope: str = "read"      # read | write  (kunci personal)
-    kind: str = "personal"   # personal | gateway (gateway: SPV saja, selalu baca-saja)
+    kind: str = "personal"   # personal | gateway (gateway: SPV saja)
 
 
 # ============== LOGIN RATE LIMIT ==============
@@ -501,7 +501,7 @@ def build_auth_router(db: AsyncIOMotorDatabase) -> APIRouter:
             "user_id": current["user_id"],
             "name": name,
             "kind": payload.kind,
-            "scope": "read" if payload.kind == "gateway" else payload.scope,
+            "scope": payload.scope,
             "prefix": raw_key[:16],
             "key_hash": hashlib.sha256(raw_key.encode("utf-8")).hexdigest(),
             "created_at": datetime.now(timezone.utc),
@@ -510,6 +510,25 @@ def build_auth_router(db: AsyncIOMotorDatabase) -> APIRouter:
         }
         await db.api_keys.insert_one(doc)
         return {**{k: v for k, v in doc.items() if k not in ("_id", "key_hash")}, "key": raw_key}
+
+    class ScopePayload(BaseModel):
+        scope: str
+
+    @router.put("/api-keys/{key_id}/scope")
+    async def ubah_scope_api_key(key_id: str, payload: ScopePayload, request: Request):
+        """Ubah akses kunci: read (baca saja) atau write (baca + tulis/edit). Kunci gateway hanya oleh SPV."""
+        current = await get_current_user(request)
+        if payload.scope not in ("read", "write"):
+            raise HTTPException(400, "Scope harus read atau write.")
+        k = await db.api_keys.find_one({"id": key_id, "revoked_at": None}, {"_id": 0, "key_hash": 0})
+        if not k:
+            raise HTTPException(404, "API key tidak ditemukan atau sudah dicabut.")
+        is_spv = current.get("role") == "spv"
+        if (k.get("kind") == "gateway" and not is_spv) or (k["user_id"] != current["user_id"] and not is_spv):
+            raise HTTPException(403, "Tidak boleh mengubah kunci ini.")
+        await db.api_keys.update_one({"id": key_id}, {"$set": {"scope": payload.scope, "scope_diubah_at": datetime.now(timezone.utc),
+                                                              "scope_diubah_oleh": current.get("name")}})
+        return {**k, "scope": payload.scope}
 
     @router.delete("/api-keys/{key_id}")
     async def revoke_api_key(key_id: str, request: Request):
