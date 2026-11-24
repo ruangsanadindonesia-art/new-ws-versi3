@@ -7,7 +7,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { TIPES } from "./shared";
+import { TIPES, KONTEN_JENIS, KontenStatus } from "./shared";
 import { RoleTag, raciRoles, PersonSelect, PeopleSelect, RaciLegend } from "./raci";
 import { reorderTasks, createTaskList, updateTaskList, deleteTaskList, createTaskLabel, updateTaskLabel, deleteTaskLabel } from "@/lib/api";
 import { toast } from "sonner";
@@ -149,10 +149,11 @@ function ColumnHeader({ label, items, onCreate, onUpdate, onDelete, refresh }) {
 function Row({ task, idx, lists, labels, labelMap, listMap, anggotaAll, anggotaMap, divisiList, currentDivisiId, selected, anySelected, onToggleSelect, onSaveCell, onEdit, onMove, onArchive, onUnarchive, onDelete, arsipMode, isSpv = true, myAnggotaId = null, onSetujui = null, refreshLists, refreshLabels, refreshAnggota }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
-  const isRutin = task.kategori !== "PROJECT";
+  const isKonten = !!task.konten_id;
+  const isRutin = task.kategori !== "PROJECT" && !isKonten;
   const isMoved = !!task.moved_at;
   const myRoles = raciRoles(task, myAnggotaId);
-  const canDef = isSpv || myRoles.includes("A");
+  const canDef = (isSpv || myRoles.includes("A")) && !isKonten;
   const canWork = isSpv || myRoles.includes("R");
   const raciExclude = [task.penerima_tugas_id, task.pemberi_id].filter(Boolean);
 
@@ -209,10 +210,10 @@ function Row({ task, idx, lists, labels, labelMap, listMap, anggotaAll, anggotaM
         </div>
       </td>
 
-      <td className="p-2"><CellSelectSimple value={task.kategori} options={TIPES.map((t) => ({ id: t, nama: t }))} onChange={(v) => onSaveCell(task.id, { kategori: v })} testId={`row-tipe-${task.id}`} /></td>
+      <td className="p-2">{isKonten ? <span className="whitespace-nowrap text-[11px] font-semibold text-emerald-900">{KONTEN_JENIS[task.konten_jenis] || "Konten"}</span> : <CellSelectSimple value={task.kategori} options={TIPES.map((t) => ({ id: t, nama: t }))} onChange={(v) => onSaveCell(task.id, { kategori: v })} testId={`row-tipe-${task.id}`} />}</td>
 
       <td className="p-2">
-        {isRutin ? (
+        {isKonten ? <KontenStatus t={task} /> : isRutin ? (
           <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-purple-100 px-2.5 py-1 text-[11px] font-semibold text-purple-800">
             <Repeat size={10} /> On Tracker
           </span>

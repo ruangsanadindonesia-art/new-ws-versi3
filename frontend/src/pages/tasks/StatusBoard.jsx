@@ -2,6 +2,7 @@ import { DndContext, MouseSensor, TouchSensor, useSensor, useSensors, useDraggab
 import { CSS } from "@dnd-kit/utilities";
 import { Calendar, User } from "lucide-react";
 import { PrioritasBadge } from "./dialogs";
+import { KontenStatus } from "./shared";
 
 // Kanban berdasarkan STATUS — dipakai di tab lintas tim (Untuk saya, Review, Saya berikan, Diikuti, Semua tim).
 export const KOLOM = [
@@ -14,7 +15,7 @@ const kolomOf = (t) => KOLOM.find((c) => c.status.includes(t.status))?.k || "BEL
 const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 
 function Kartu({ t, anggotaMap, onEdit, onPindah, dragDisabled }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: t.id, disabled: dragDisabled });
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: t.id, disabled: dragDisabled || !!t.konten_id });
   const r = anggotaMap[t.penerima_tugas_id];
   const telat = t.deadline && t.status !== "SELESAI" && t.deadline < todayStr();
   const k = kolomOf(t);
@@ -25,6 +26,7 @@ function Kartu({ t, anggotaMap, onEdit, onPindah, dragDisabled }) {
         <p className="text-sm font-medium leading-snug text-emerald-950">{t.nama}</p>
       </button>
       <div className="mt-1.5 flex flex-wrap items-center gap-1">
+        {t.konten_id && <KontenStatus t={t} />}
         <PrioritasBadge p={t.prioritas} />
         {t.status === "REVISI" && <span className="rounded bg-red-600 px-1.5 py-px text-[10px] font-bold text-white">REVISI</span>}
         {t.status === "TERKENDALA" && <span className="rounded bg-orange-100 px-1.5 py-px text-[10px] font-semibold text-orange-800">Terkendala</span>}

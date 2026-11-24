@@ -11,7 +11,8 @@ Jenis kunci:
               karena itu gateway dibatasi baca-saja.
 
 Prinsip: setiap tool memanggil fungsi endpoint yang sama dengan aplikasi web, sehingga semua aturan akses
-(RBAC, RACI, alur review) tetap berlaku. Yang sengaja TIDAK disediakan: hapus, arsip, approve/revisi,
+(RBAC, RACI, alur review) tetap berlaku. Kunci write juga bisa MENGEDIT tugas (ubah_tugas) dan menjalankan alur Produksi Konten (buat/ubah/aksi/performa),
+dengan izin yang sama seperti di aplikasi. Yang sengaja TIDAK disediakan: hapus, arsip, approve/revisi tugas biasa,
 kelola user, aksi massal.
 """
 import json
@@ -74,7 +75,8 @@ def build_mcp_router(srv) -> APIRouter:
             "C": [am.get(i, "?") for i in t.get("consulted_ids") or []],
             "I": [am.get(i, "?") for i in t.get("informed_ids") or []],
             "hasil_link": t.get("hasil_link") or None,
-            "link": f"{FRONT}/tasks",
+            "link": f"{FRONT}/konten?buka={t['konten_id']}" if t.get("konten_id") else f"{FRONT}/tasks",
+            **({"konten_tipe": t.get("konten_jenis"), "konten_status": t.get("konten_status")} if t.get("konten_id") else {}),
         }
 
     async def _resolve_anggota(nama_or_id: Optional[str]) -> Optional[str]:
@@ -291,6 +293,117 @@ def build_mcp_router(srv) -> APIRouter:
         tgl = a.get("tanggal") or date.today().isoformat()
         await srv.upsert_entry(srv.AmaliyahEntryCreate(item_id=a["item_id"], tanggal=tgl, checked=a.get("selesai", True)), user)
         return {"ok": True, "tanggal": tgl}
+
+    @tool("ubah_tugas", "Edit tugas yang saya pegang: nama, deadline (YYYY-MM-DD), jam deadline (HH:MM, kosong = hapus), prioritas, instruksi, brief, R/A/C/I. "
+          "Hanya field yang dikirim yang diubah. Izin mengikuti peran RACI (A/SPV mengatur isi & orang; R hanya hasil). Tugas konten diubah lewat tool konten.",
+          {"task_id": {"type": "string"}, "nama": {"type": "string", "minLength": 2}, "deadline": {"type": "string"},
+           "deadline_jam": {"type": "string"}, "prioritas": {"type": "string", "enum": ["TINGGI", "SEDANG", "RENDAH", ""]},
+           "instruksi": {"type": "string"}, "brief_link": {"type": "string"},
+           "R": {"type": "string", "description": "nama/id"}, "A": {"type": "string", "description": "nama/id"},
+           "C": {"type": "array", "items": {"type": "string"}}, "I": {"type": "array", "items": {"type": "string"}}},
+          ["task_id"], write=True)
+    async def t_ubah(user, ctx, a):
+        upd = {}
+        for src, dst in (("nama", "nama"), ("deadline", "deadline"), ("deadline_jam", "deadline_jam"), ("prioritas", "prioritas"),
+                         ("instruksi", "catatan_tim"), ("brief_link", "brief_link")):
+            if src in a:
+                upd[dst] = a[src]
+        if a.get("R"):
+            upd["penerima_tugas_id"] = await _resolve_anggota(a["R"])
+        if a.get("A"):
+            upd["pemberi_id"] = await _resolve_anggota(a["A"])
+        if "C" in a:
+            upd["consulted_ids"] = [await _resolve_anggota(x) for x in a["C"] or []]
+        if "I" in a:
+            upd["informed_ids"] = [await _resolve_anggota(x) for x in a["I"] or []]
+        if not upd:
+            raise HTTPException(400, "Kirim minimal satu field yang diubah.")
+        before = await db.tasks.find_one({"id": a["task_id"]}, {"_id": 0})
+        t = await srv.update_task(a["task_id"], srv.TaskUpdate(**upd), ctx["actor"])
+        t = t if isinstance(t, dict) else t.model_dump()
+        ditolak = [k for k, v in upd.items() if t.get(k) != v and (before or {}).get(k) == t.get(k)]
+        return {"ok": True, "tugas": _task_brief(t, await _anggota_map(), await _divisi_map()),
+                **({"tidak_diubah_karena_peran": ditolak} if ditolak else {})}
+
+    # --------------------------- Produksi Konten (1 konten = 1 tugas, status per tipe)
+    def _konten_brief(k: dict) -> dict:
+        return {"id": k["id"], "kode": k["kode"], "tipe": k["jenis"], "judul": k["judul"], "tanggal_tayang": k["tanggal_tayang"],
+                "jam_tayang": k.get("jam_tayang") or None, "status": k["status_konten"], "dikerjakan": k.get("pelaksana_nama"),
+                "dipegang": k.get("pemegang_nama"), "target": k.get("deadline"), "terlambat": k.get("terlambat"),
+                "aksi_tersedia": [{"aksi": x["k"], "label": x["label"], "wajib": x["wajib"]} for x in k.get("aksi") or []],
+                "link": f"{FRONT}/konten?buka={k['id']}"}
+
+    @tool("daftar_konten", "Daftar konten Produksi Konten (tim Multimedia). Filter opsional: tipe (REELS, CAROUSEL, SINGLE, THREADS, STORY, WA), "
+          "status (mis. EDITING), rentang tanggal tayang, dan saya=true untuk yang sedang saya pegang.",
+          {"tipe": {"type": "string"}, "status": {"type": "string"}, "dari": {"type": "string"}, "sampai": {"type": "string"},
+           "saya": {"type": "boolean"}, "cari": {"type": "string"}})
+    async def t_konten_list(user, ctx, a):
+        kr = srv.konten_router
+        rows = await kr.daftar_fn(a.get("dari"), a.get("sampai"), a.get("cari"), a.get("tipe"), a.get("status"), bool(a.get("dari") or a.get("sampai")), user)
+        if a.get("saya"):
+            sc = await srv.user_scope(user)
+            rows = [k for k in rows if sc["anggota_id"] in (k.get("pemegang_ids") or [])]
+        return {"jumlah": len(rows), "konten": [_konten_brief(k) for k in rows[:60]]}
+
+    @tool("detail_konten", "Detail satu konten (pakai kode RS-xxx/TH-xxx atau id): isi, status, alur, aksi yang tersedia, link, performa, riwayat.",
+          {"kode": {"type": "string"}}, ["kode"])
+    async def t_konten_detail(user, ctx, a):
+        k = await srv.konten_router.detail_fn(a["kode"], user)
+        meta = __import__("konten").JENIS[k["jenis"]]
+        return {**_konten_brief(k), "alur": [x["label"] for x in k["alur"]], "platform": k.get("platforms"),
+                "isi": {f[0]: k.get(f[0]) for f in meta["field"] if k.get(f[0])}, "hasil_url": k.get("hasil_url") or None,
+                "catatan_revisi": k.get("revisi_catatan") or None, "links": k.get("links") or {}, "performa": k.get("performa") or {},
+                "riwayat": [{"dari": r.get("dari"), "ke": r["ke"], "oleh": r.get("oleh"), "waktu": r["at"], "catatan": r.get("catatan")} for r in (k.get("riwayat") or [])[-15:]]}
+
+    @tool("buat_konten", "Buat konten baru (lead konten/SPV; kanal teks juga penulisnya). Otomatis jadi satu tugas. "
+          "tipe: REELS | CAROUSEL | SINGLE | THREADS | STORY | WA. platform (untuk REELS/CAROUSEL/SINGLE): IG, TIKTOK, SHORT, YT. "
+          "isi: objek field per tipe, mis. {pilar, bucket, funnel, cta_keyword, naskah_url, brief} atau untuk Threads {label, hook, isi, cta, bucket, pilar}.",
+          {"tipe": {"type": "string", "enum": ["REELS", "CAROUSEL", "SINGLE", "THREADS", "STORY", "WA"]}, "judul": {"type": "string"},
+           "tanggal_tayang": {"type": "string"}, "jam_tayang": {"type": "string"}, "platform": {"type": "array", "items": {"type": "string"}},
+           "isi": {"type": "object"}}, ["tipe", "tanggal_tayang"], write=True)
+    async def t_konten_buat(user, ctx, a):
+        kr = srv.konten_router
+        k = await kr.buat_fn(kr.KontenIn(jenis=a["tipe"], judul=a.get("judul") or "", tanggal_tayang=a["tanggal_tayang"],
+                                         jam_tayang=a.get("jam_tayang") or "", platforms=a.get("platform") or ["IG"],
+                                         isi={x: str(v) for x, v in (a.get("isi") or {}).items()}), ctx["actor"])
+        return {"ok": True, "konten": _konten_brief(k)}
+
+    @tool("ubah_konten", "Edit isi konten (hanya pemegang status saat ini, lead, atau SPV): judul, tanggal/jam tayang, platform, field isi, link hasil, link tayang per platform. "
+          "Link tayang semua platform terisi → status otomatis Posted.",
+          {"kode": {"type": "string"}, "judul": {"type": "string"}, "tanggal_tayang": {"type": "string"}, "jam_tayang": {"type": "string"},
+           "platform": {"type": "array", "items": {"type": "string"}}, "isi": {"type": "object"}, "hasil_url": {"type": "string"},
+           "links": {"type": "object", "description": "mis. {\"IG\": \"https://...\"}"}}, ["kode"], write=True)
+    async def t_konten_ubah(user, ctx, a):
+        kr = srv.konten_router
+        k0 = await kr.ambil(a["kode"])
+        body = {x: a[x] for x in ("judul", "tanggal_tayang", "jam_tayang", "hasil_url", "links") if x in a}
+        if "platform" in a:
+            body["platforms"] = a["platform"]
+        if "isi" in a:
+            body["isi"] = {x: str(v) for x, v in (a["isi"] or {}).items()}
+        k = await kr.ubah_fn(k0["id"], kr.KontenUpd(**body), ctx["actor"])
+        return {"ok": True, "konten": _konten_brief(k)}
+
+    @tool("aksi_konten", "Jalankan langkah alur konten (mis. setor hasil edit, setujui, minta revisi, sudah tayang). Lihat aksi_tersedia di detail_konten. "
+          "Wajib: 'hasil' → isi hasil_url; 'catatan' → isi catatan revisi; 'link' → isi links semua platform.",
+          {"kode": {"type": "string"}, "aksi": {"type": "string"}, "catatan": {"type": "string"}, "hasil_url": {"type": "string"},
+           "links": {"type": "object"}}, ["kode", "aksi"], write=True)
+    async def t_konten_aksi(user, ctx, a):
+        kr = srv.konten_router
+        k0 = await kr.ambil(a["kode"])
+        k = await kr.aksi_fn(k0["id"], kr.AksiIn(aksi=a["aksi"], catatan=a.get("catatan") or "", hasil_url=a.get("hasil_url") or "",
+                                                 links=a.get("links")), ctx["actor"])
+        return {"ok": True, "status_sekarang": k["status_konten"], "konten": _konten_brief(k)}
+
+    @tool("isi_performa_konten", "Isi angka performa konten yang sudah tayang (publisher/lead/SPV). platform: IG/TIKTOK/SHORT/YT (kanal teks: kosongkan). "
+          "angka: objek metrik, mis. {views, reach, likes, comments, saves, shares, follows, dm, tanya_harga, tanya_program, voice_note, pendaftaran}. "
+          "Semua platform terisi saat status Laporan → Selesai.",
+          {"kode": {"type": "string"}, "platform": {"type": "string"}, "angka": {"type": "object"}}, ["kode", "angka"], write=True)
+    async def t_konten_perf(user, ctx, a):
+        kr = srv.konten_router
+        k0 = await kr.ambil(a["kode"])
+        k = await kr.performa_fn(k0["id"], {**(a.get("angka") or {}), "platform": a.get("platform") or ""}, ctx["actor"])
+        return {"ok": True, "status_sekarang": k["status_konten"]}
 
     # --------------------------- gateway: penautan chat
     @tool("tautkan_akun", "Tautkan akun chat ke akun Workspace memakai kode sekali pakai dari Pengaturan › Integrasi AI.",

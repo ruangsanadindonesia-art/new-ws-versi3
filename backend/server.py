@@ -72,7 +72,11 @@ async def _assert_task_access(task_id: str, user: dict) -> dict:
         return task
     my_ang = scope["anggota_id"]
     if my_ang and (task.get("penerima_tugas_id") == my_ang or task.get("pemberi_id") == my_ang
-                   or my_ang in (task.get("consulted_ids") or []) or my_ang in (task.get("informed_ids") or [])):
+                   or my_ang in (task.get("consulted_ids") or []) or my_ang in (task.get("informed_ids") or [])
+                   or my_ang in (task.get("konten_pemegang") or [])):
+        return task
+    # Tugas konten terbuka untuk seluruh anggota tim konten (perjalanan konten transparan).
+    if task.get("konten_id") and task.get("divisi_id") and task.get("divisi_id") == scope["divisi_id"]:
         return task
     # Kepala tim memantau semua tugas timnya (termasuk rutin). Anggota biasa hanya tugas yang melibatkannya.
     hd = scope["head_divisi_id"]
@@ -198,6 +202,11 @@ class TaskBase(BaseModel):
     prioritas: Optional[str] = None  # TINGGI | SEDANG | RENDAH (satu nilai)
     selesai_at: Optional[str] = None  # kapan status menjadi SELESAI (dasar tepat waktu di raport)
     pengajuan_pindah: Optional[dict] = None  # pengajuan ganti R menunggu persetujuan kepala tim
+    # Tugas Produksi Konten (1 konten = 1 tugas). Diisi oleh modul konten, bukan dari form tugas.
+    konten_id: Optional[str] = None
+    konten_jenis: Optional[str] = None
+    konten_status: Optional[str] = None
+    konten_pemegang: List[str] = Field(default_factory=list)
 
 
 class Task(TaskBase):
@@ -570,7 +579,7 @@ async def list_tasks(
         if not my_ang:
             return []
         q["$or"] = [{"penerima_tugas_id": my_ang}, {"pemberi_id": my_ang},
-                    {"consulted_ids": my_ang}, {"informed_ids": my_ang}]
+                    {"consulted_ids": my_ang}, {"informed_ids": my_ang}, {"konten_pemegang": my_ang}]
     elif divisi_id and not peran:
         q.update(await _tim_query(divisi_id))
     if peran:
@@ -579,8 +588,15 @@ async def list_tasks(
             raise HTTPException(400, "peran harus R, A, C, atau I")
         if not scope["anggota_id"]:
             return []
-        q[field] = scope["anggota_id"]
+        if peran.upper() == "R":
+            # Tugas biasa: saya R. Tugas konten: saya pemegang status konten saat ini.
+            q.pop("$or", None)
+            q["$or"] = [{"penerima_tugas_id": scope["anggota_id"], "konten_id": None}, {"konten_pemegang": scope["anggota_id"]}]
+        else:
+            q[field] = scope["anggota_id"]
+            q["konten_id"] = None  # tugas konten tidak ditampilkan di tab A/C/I
     if perlu_review:
+        q["konten_id"] = None  # review konten dilakukan lewat Produksi Konten
         q["status"] = "MENUNGGU_REVIEW"
         q.pop("divisi_id", None)
         if not scope["is_spv"]:
@@ -597,6 +613,11 @@ async def create_task(payload: TaskBase, user: dict = Depends(get_current_user))
     R default = pembuat, A default = pembuat. Tugas tersimpan di divisi pembuat (kolom kanban pembuat)."""
     scope = await user_scope(user)
     data = payload.model_dump()
+    for kk in ("konten_id", "konten_jenis", "konten_status"):
+        data[kk] = None
+    data["konten_pemegang"] = []
+    if data.get("kategori") == "KONTEN":
+        raise HTTPException(400, "Tugas konten dibuat dari menu Produksi Konten.")
     me = scope["anggota_id"]
     r_id = data.get("penerima_tugas_id") or me
     a_id = data.get("pemberi_id") or me
@@ -711,11 +732,23 @@ async def _sync_status_list(task: dict, update: dict) -> None:
             update["list_id"] = target
 
 
+def _tolak_konten(task: dict, apa: str = "Status") -> None:
+    if task.get("konten_id"):
+        raise HTTPException(400, f"{apa} tugas konten diubah lewat tombol aksi di menu Produksi Konten.")
+
+
 @api_router.put("/tasks/{task_id}", response_model=Task)
 async def update_task(task_id: str, payload: TaskUpdate, user: dict = Depends(get_current_user)):
     task = await _assert_task_access(task_id, user)
     scope = await user_scope(user)
     update = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if task.get("konten_id"):
+        # Status, kolom, R/A, dan deadline tugas konten dikendalikan oleh alur konten.
+        for kk in ("status", "list_id", "penerima_tugas_id", "pemberi_id", "deadline", "deadline_jam", "kategori", "nama"):
+            if kk in update and update[kk] != task.get(kk):
+                _tolak_konten(task, {"status": "Status", "list_id": "Kolom", "deadline": "Deadline", "deadline_jam": "Jam deadline",
+                                     "nama": "Judul", "kategori": "Tipe"}.get(kk, "Penanggung jawab"))
+            update.pop(kk, None)
     # penerima/pemberi boleh dikirim null secara eksplisit? Tidak: R & A wajib ada.
     if not scope["is_spv"]:
         roles = _raci_roles(task, scope["anggota_id"])
@@ -761,12 +794,6 @@ async def update_task(task_id: str, payload: TaskUpdate, user: dict = Depends(ge
         if mid:
             update["list_id"] = mid
         submitted_review = True
-    if task.get("konten_tahap") and update.get("status") in ("SELESAI", "MENUNGGU_REVIEW") and task.get("status") != "SELESAI":
-        k = await db.konten.find_one({"id": task.get("konten_id")}, {"_id": 0, "task_ids": 1})
-        sebelum = await konten_router.tahap_terbuka_fn(k or {}, task["konten_tahap"]) if k else None
-        if sebelum:
-            from konten import LABEL as _KL
-            raise HTTPException(400, f"Tahap konten sebelumnya ({_KL[sebelum]}) belum selesai.")
     _stamp_selesai(task, update)
     update["updated_at"] = now_iso()
     result = await db.tasks.find_one_and_update(
@@ -799,6 +826,7 @@ async def _set_status(task: dict, status: str, extra: Optional[dict] = None) -> 
 async def submit_review(task_id: str, user: dict = Depends(get_current_user)):
     """R mengirim hasil ke A untuk disetujui."""
     task = await _assert_task_access(task_id, user)
+    _tolak_konten(task, "Status")
     scope = await user_scope(user)
     if not scope["is_spv"] and "R" not in _raci_roles(task, scope["anggota_id"]):
         raise HTTPException(403, "Hanya R (yang mengerjakan) yang dapat mengirim untuk review.")
@@ -815,6 +843,7 @@ async def submit_review(task_id: str, user: dict = Depends(get_current_user)):
 async def approve_task(task_id: str, user: dict = Depends(get_current_user)):
     """A (atau SPV) menyetujui hasil -> SELESAI."""
     task = await _assert_task_access(task_id, user)
+    _tolak_konten(task, "Status")
     scope = await user_scope(user)
     if not scope["is_spv"] and "A" not in _raci_roles(task, scope["anggota_id"]):
         raise HTTPException(403, "Hanya A (penyetuju) atau SPV yang dapat menyetujui hasil.")
@@ -833,6 +862,7 @@ class RevisiPayload(BaseModel):
 async def revisi_task(task_id: str, payload: RevisiPayload, user: dict = Depends(get_current_user)):
     """Pemberi tugas (atau SPV) meminta revisi: set status=REVISI + catatan untuk penerima."""
     task = await _assert_task_access(task_id, user)
+    _tolak_konten(task, "Status")
     scope = await user_scope(user)
     if not scope["is_spv"]:
         my_ang = scope["anggota_id"]
@@ -858,6 +888,7 @@ async def revisi_task(task_id: str, payload: RevisiPayload, user: dict = Depends
 @api_router.delete("/tasks/{task_id}")
 async def delete_task(task_id: str, user: dict = Depends(get_current_user)):
     task = await _assert_task_access(task_id, user)
+    _tolak_konten(task, "Hapus")
     if not _can_manage_task(task, await user_scope(user), "delete"):
         raise HTTPException(403, "Hanya SPV atau pembuat tugas (yang juga penerimanya) yang dapat menghapus tugas ini. Gunakan Arsip.")
     r = await db.tasks.delete_one({"id": task_id})
@@ -871,6 +902,7 @@ async def delete_task(task_id: str, user: dict = Depends(get_current_user)):
 @api_router.post("/tasks/{task_id}/archive", response_model=Task)
 async def archive_task(task_id: str, user: dict = Depends(get_current_user)):
     task = await _assert_task_access(task_id, user)
+    _tolak_konten(task, "Arsip")
     if not _can_manage_task(task, await user_scope(user), "archive"):
         raise HTTPException(403, "Hanya SPV atau penerima tugas yang dapat mengubah arsip tugas ini.")
     result = await db.tasks.find_one_and_update(
@@ -903,6 +935,7 @@ async def unarchive_task(task_id: str, user: dict = Depends(get_current_user)):
 @api_router.post("/tasks/{task_id}/move", response_model=Task)
 async def move_task(task_id: str, payload: MoveTaskPayload, user: dict = Depends(get_current_user)):
     task = await _assert_task_access(task_id, user)
+    _tolak_konten(task, "Kolom/penanggung jawab")
     scope = await user_scope(user)
     if not scope["is_spv"] and payload.divisi_id and payload.divisi_id != scope["divisi_id"] and payload.divisi_id != task.get("divisi_id"):
         raise HTTPException(403, "Anggota tidak dapat memindahkan tugas ke tim lain.")
@@ -990,6 +1023,7 @@ async def pindah_menunggu(user: dict = Depends(get_current_user)):
 @api_router.post("/tasks/{task_id}/pindah/ajukan")
 async def ajukan_pindah(task_id: str, payload: AjukanPindahPayload, user: dict = Depends(get_current_user)):
     task = await _assert_task_access(task_id, user)
+    _tolak_konten(task, "Penanggung jawab")
     scope = await user_scope(user)
     if await _boleh_ganti_r(scope, task):
         raise HTTPException(400, "Anda bisa langsung mengganti penanggung jawab tanpa pengajuan.")
@@ -2439,11 +2473,13 @@ async def on_startup():
         await db.konten.create_index("kode", unique=True)
         await db.konten.create_index([("status", 1), ("tanggal_tayang", 1)])
         await db.tasks.create_index("konten_id", sparse=True)
+        await db.tasks.create_index("konten_pemegang", sparse=True)
         await db.amaliyah_uzur.create_index([("user_id", 1), ("tanggal", 1)], unique=True)
     except Exception:
         pass
     import asyncio as _aio
     import dashboard_sync
+    app.state.konten_loop = konten_router.mulai_loop()
     if os.environ.get("DASHBOARD_MCP_KEY") and os.environ.get("DASHBOARD_SYNC", "1") == "1":
         app.state.dash_sync = _aio.create_task(dashboard_sync.loop(db))
     # Migrate existing amaliyah_entries without user_id → assign to first SPV

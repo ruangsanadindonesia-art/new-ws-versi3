@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useRef } from "react";
-import { useOutletContext } from "react-router-dom";
+import { useOutletContext, useNavigate } from "react-router-dom";
 import { Plus, Trash2, LayoutGrid, Table as TableIcon, Search, X, Users, Archive, ArchiveRestore, ArrowRightLeft, FileUp, BarChart3, ChevronDown, UserPlus, ArrowUpDown } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -71,6 +71,7 @@ export default function Tasks() {
 
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+  const navigate = useNavigate();
   const [form, setForm] = useState(emptyForm);
   const [moveOpen, setMoveOpen] = useState(false);
   const [moveTaskState, setMoveTaskState] = useState(null);
@@ -182,7 +183,7 @@ export default function Tasks() {
   };
 
   const openNew = () => { setEditing(null); setForm({ ...emptyForm, divisi_id: myDivisiId || divisiId, list_id: lists.find((l) => !l.is_done)?.id || null, penerima_tugas_id: myAnggotaId, pemberi_id: myAnggotaId }); setTaskDialogOpen(true); };
-  const openEdit = (t) => { setEditing(t); setForm({ ...emptyForm, ...t, tanggal_mulai: t.tanggal_mulai || "", deadline: t.deadline || "", deadline_jam: t.deadline_jam || "", prioritas: t.prioritas || "", label_ids: t.label_ids || [], consulted_ids: t.consulted_ids || [], informed_ids: t.informed_ids || [] }); setTaskDialogOpen(true); };
+  const openEdit = (t) => { if (t.konten_id) { navigate(`/konten?buka=${t.konten_id}`); return; } setEditing(t); setForm({ ...emptyForm, ...t, tanggal_mulai: t.tanggal_mulai || "", deadline: t.deadline || "", deadline_jam: t.deadline_jam || "", prioritas: t.prioritas || "", label_ids: t.label_ids || [], consulted_ids: t.consulted_ids || [], informed_ids: t.informed_ids || [] }); setTaskDialogOpen(true); };
   const openMove = (t) => { setMoveTaskState(t); setMoveOpen(true); };
 
   // keepOpen: dipakai tombol "Simpan & kirim untuk review" — simpan dulu, lalu aksi review menutup dialog.

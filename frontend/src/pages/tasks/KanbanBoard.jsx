@@ -8,6 +8,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { createTaskList } from "@/lib/api";
 import { toast } from "sonner";
 import { PrioritasBadge } from "./dialogs";
+import { KontenStatus } from "./shared";
 
 export default function KanbanBoard({
   lists, tasks, labels, arsipMode, divisiId,
@@ -19,7 +20,7 @@ export default function KanbanBoard({
   const [active, setActive] = useState(null);
 
   // Filter out rutin tasks from kanban (they belong to Rutin Tracker)
-  const projectTasks = tasks.filter((t) => t.kategori === "PROJECT");
+  const projectTasks = tasks.filter((t) => t.kategori === "PROJECT" || t.konten_id);
   const rutinCount = tasks.length - projectTasks.length;
 
   const byList = {};
@@ -108,7 +109,7 @@ function Column({ list, tasks, labels, anggotaMap, kategoriMap, arsipMode, anySe
 }
 
 function DraggableCard({ task, labels, anggotaMap, kategoriMap, arsipMode, selected, anySelected, toggleSelect, onEdit, onArchive, onUnarchive, onDelete, onMove }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: task.id, disabled: selected });
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: task.id, disabled: selected || !!task.konten_id });
   const style = { transform: CSS.Translate.toString(transform), opacity: isDragging ? 0.4 : 1 };
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
@@ -151,7 +152,7 @@ function Card({ task, labels, anggotaMap, kategoriMap, arsipMode, selected, anyS
               </button>
             </div>
           )}
-          <p className="text-sm font-semibold text-emerald-950">{task.nama}</p>
+          <div><p className="text-sm font-semibold text-emerald-950">{task.nama}</p>{task.konten_id && <div className="mt-1"><KontenStatus t={task} /></div>}</div>
           {task.prioritas && <div className="mt-0.5"><PrioritasBadge p={task.prioritas} /></div>}
         </div>
         {onEdit && (
