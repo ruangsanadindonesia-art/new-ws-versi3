@@ -17,6 +17,7 @@ import {
 import KanbanBoard from "./tasks/KanbanBoard";
 import StatusBoard from "./tasks/StatusBoard";
 import TableView from "./tasks/TableView";
+import { KONTEN_JENIS, KONTEN_STATUS } from "./tasks/shared";
 import {
   TaskDialog, MoveTaskDialog, BulkMoveDialog,
   DivisiManagerDialog, AnggotaManagerDialog,
@@ -64,7 +65,12 @@ export default function Tasks() {
   const [mode, setMode] = useState(user?.anggota_id ? "saya" : "tim");
   const [reviewCount, setReviewCount] = useState(0);
   const [sasaranList, setSasaranList] = useState([]);
-  const [filter, setFilter] = useState({ search: "", list_id: "ALL", prioritas: "ALL", penerima_id: "ALL" });
+  const [filter, setFilterRaw] = useState(() => {
+    try { const v = JSON.parse(localStorage.getItem(FILTER_KEY) || "null"); if (v && typeof v === "object") return { ...FILTER_KOSONG, ...v, search: "" }; } catch { /* abaikan */ }
+    return FILTER_KOSONG;
+  });
+  // Filter tersimpan per perangkat (kecuali kata pencarian).
+  const setFilter = (f) => { setFilterRaw(f); try { const { search: _s, ...simpan } = f; localStorage.setItem(FILTER_KEY, JSON.stringify(simpan)); } catch { /* abaikan */ } };
   const [selectedIds, setSelectedIds] = useState([]);
   const [sortBy, setSortBy] = useState(() => { try { return localStorage.getItem(SORT_KEY) || "cerdas"; } catch { return "cerdas"; } });
   const [pindahList, setPindahList] = useState([]);
@@ -153,13 +159,25 @@ export default function Tasks() {
   const refreshAnggota = async () => setAnggotaAll(await listAnggota());
   const refreshLists = async () => { if (listsDivisi) setLists(await listTaskLists({ divisi_id: listsDivisi })); refreshAllListsMap(); };
 
-  const filteredRaw = useMemo(() => tasks.filter((t) => {
-    if (filter.search && !t.nama?.toLowerCase().includes(filter.search.toLowerCase())) return false;
-    if (filter.list_id !== "ALL" && (t.list_id || "no-list") !== filter.list_id) return false;
-    if (filter.prioritas !== "ALL" && (t.prioritas || "NONE") !== filter.prioritas) return false;
-    if (filter.penerima_id !== "ALL" && t.penerima_tugas_id !== filter.penerima_id) return false;
-    return true;
-  }), [tasks, filter]);
+  // Filter multi-pilih: dalam satu kelompok = ATAU, antar kelompok = DAN.
+  const filteredRaw = useMemo(() => {
+    const lokal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const hariIni = lokal(new Date());
+    const minggu = lokal(new Date(Date.now() + 7 * 864e5));
+    const tenggatOf = (t) => (!t.deadline ? "NONE" : t.status === "SELESAI" ? "DONE" : t.deadline < hariIni ? "LEWAT" : t.deadline === hariIni ? "HARI_INI" : t.deadline <= minggu ? "PEKAN" : "NANTI");
+    const ada = (arr, v) => !arr?.length || arr.includes(v);
+    return tasks.filter((t) => {
+      if (filter.search && !t.nama?.toLowerCase().includes(filter.search.toLowerCase())) return false;
+      if (!ada(filter.status, t.status)) return false;
+      if (isTim && !ada(filter.list_id, t.list_id || "no-list")) return false;  // kolom hanya berlaku di tab Tim
+      if (!ada(filter.prioritas, t.prioritas || "NONE")) return false;
+      if (!ada(filter.penerima_id, t.penerima_tugas_id)) return false;
+      if (!ada(filter.tenggat, tenggatOf(t))) return false;
+      if (!ada(filter.konten_jenis, t.konten_id ? t.konten_jenis : "BUKAN")) return false;
+      if (filter.konten_status?.length && !(t.konten_id && filter.konten_status.includes(t.konten_status))) return false;
+      return true;
+    });
+  }, [tasks, filter, isTim]);
   const filtered = useMemo(() => (SORTS[sortBy]?.fn ? [...filteredRaw].sort(SORTS[sortBy].fn) : filteredRaw), [filteredRaw, sortBy]);
   const pilihSort = (v) => { setSortBy(v); try { localStorage.setItem(SORT_KEY, v); } catch { /* abaikan */ } };
   // Pindah kolom di Kanban status. Ke "Menunggu review" = kirim hasil untuk review; ke "Selesai" = server
@@ -274,7 +292,12 @@ export default function Tasks() {
 
   const onReorderLocal = (r) => setTasks(r);
   const outletUnread = outlet?.unread?.by_divisi || {};
-  const filterActive = filter.search || filter.list_id !== "ALL" || filter.prioritas !== "ALL" || filter.penerima_id !== "ALL";
+  const jumlahFilter = FILTER_GRUP.reduce((n, g) => n + (filter[g]?.length || 0), 0);
+  const filterActive = !!filter.search || jumlahFilter > 0;
+  const togFilter = (g, v) => { const cur = filter[g] || []; setFilter({ ...filter, [g]: cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v] }); };
+  const orangDiTugas = (() => { const ids = [...new Set(tasks.map((t) => t.penerima_tugas_id).filter(Boolean))]; return ids.map((id) => ({ id, nama: anggotaMap[id]?.nama || anggotaAll.find((a) => a.id === id)?.nama || "?" })).sort((a, b) => a.nama.localeCompare(b.nama)); })();
+  const adaKonten = tasks.some((t) => t.konten_id);
+  const statusKontenAda = [...new Set(tasks.filter((t) => t.konten_id).map((t) => t.konten_status))].sort((a, b) => URUT_KONTEN.indexOf(a) - URUT_KONTEN.indexOf(b));
   const filteredAnggotaCurrent = anggotaAll.filter((a) => a.divisi_id === divisiId);
 
   return (
@@ -349,28 +372,23 @@ export default function Tasks() {
         <Popover>
           <PopoverTrigger asChild>
             <Button variant="outline" size="sm" data-testid="open-filter" className="relative">
-              Filter {filterActive && <span className="ml-1 h-2 w-2 rounded-full bg-emerald-500" />}
+              Filter {jumlahFilter > 0 && <span className="ml-1 rounded-full bg-emerald-600 px-1.5 text-[10px] font-semibold text-white">{jumlahFilter}</span>}
               <ChevronDown size={12} />
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="w-64 p-3" align="end">
-            <p className="mb-2 text-[10px] uppercase font-semibold text-emerald-800/60">Filter Tugas</p>
-            <div className="space-y-2">
-              <div>
-                <label className="text-[10px] text-emerald-800/70">Status</label>
-                <MiniSelect value={filter.list_id} onChange={(v) => setFilter({ ...filter, list_id: v })} options={[{ id: "ALL", nama: "Semua" }, ...lists, { id: "no-list", nama: "Tanpa status" }]} testId="filter-list" />
-              </div>
-              <div>
-                <label className="text-[10px] text-emerald-800/70">Prioritas</label>
-                <MiniSelect value={filter.prioritas} onChange={(v) => setFilter({ ...filter, prioritas: v })} options={[{ id: "ALL", nama: "Semua" }, { id: "TINGGI", nama: "Tinggi" }, { id: "SEDANG", nama: "Sedang" }, { id: "RENDAH", nama: "Rendah" }, { id: "NONE", nama: "Tanpa prioritas" }]} testId="filter-prioritas" />
-              </div>
-              <div>
-                <label className="text-[10px] text-emerald-800/70">Mengerjakan (R)</label>
-                <MiniSelect value={filter.penerima_id} onChange={(v) => setFilter({ ...filter, penerima_id: v })} options={[{ id: "ALL", nama: "Semua" }, ...filteredAnggotaCurrent]} testId="filter-penerima" />
-              </div>
-              {filterActive && (
-                <Button size="sm" variant="ghost" onClick={() => setFilter({ search: "", list_id: "ALL", prioritas: "ALL", penerima_id: "ALL" })} className="w-full text-xs" data-testid="filter-reset"><X size={12} /> Reset</Button>
-              )}
+          <PopoverContent className="max-h-[75vh] w-80 overflow-y-auto p-3" align="end" data-testid="filter-panel">
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-[10px] font-semibold uppercase text-emerald-800/60">Filter tugas · bisa pilih lebih dari satu</p>
+              {jumlahFilter > 0 && <button onClick={() => setFilter({ ...FILTER_KOSONG, search: filter.search })} className="flex items-center gap-0.5 text-[11px] font-medium text-emerald-700 hover:underline" data-testid="filter-reset"><X size={11} /> Reset</button>}
+            </div>
+            <div className="space-y-3">
+              <ChipGrup judul="Status" g="status" filter={filter} tog={togFilter} opsi={STATUS_OPSI} />
+              {isTim && lists.length > 0 && <ChipGrup judul="Kolom kanban" g="list_id" filter={filter} tog={togFilter} opsi={[...lists.map((l) => ({ id: l.id, nama: l.nama })), { id: "no-list", nama: "Tanpa kolom" }]} />}
+              <ChipGrup judul="Tenggat" g="tenggat" filter={filter} tog={togFilter} opsi={TENGGAT_OPSI} />
+              <ChipGrup judul="Prioritas" g="prioritas" filter={filter} tog={togFilter} opsi={[{ id: "TINGGI", nama: "Tinggi" }, { id: "SEDANG", nama: "Sedang" }, { id: "RENDAH", nama: "Rendah" }, { id: "NONE", nama: "Tanpa prioritas" }]} />
+              {orangDiTugas.length > 1 && <ChipGrup judul="Mengerjakan (R)" g="penerima_id" filter={filter} tog={togFilter} opsi={orangDiTugas} />}
+              {adaKonten && <ChipGrup judul="Tipe konten" g="konten_jenis" filter={filter} tog={togFilter} opsi={[...Object.entries(KONTEN_JENIS).map(([id, nama]) => ({ id, nama })), { id: "BUKAN", nama: "Bukan konten" }]} />}
+              {adaKonten && statusKontenAda.length > 0 && <ChipGrup judul="Status konten" g="konten_status" filter={filter} tog={togFilter} opsi={statusKontenAda.map((id) => ({ id, nama: KONTEN_STATUS[id] || id }))} />}
             </div>
           </PopoverContent>
         </Popover>
@@ -462,12 +480,31 @@ export default function Tasks() {
   );
 }
 
-function MiniSelect({ value, onChange, options, testId }) {
+const FILTER_KEY = "ws_tugas_filter_v2";
+const FILTER_GRUP = ["status", "list_id", "prioritas", "penerima_id", "tenggat", "konten_jenis", "konten_status"];
+const FILTER_KOSONG = { search: "", ...Object.fromEntries(FILTER_GRUP.map((g) => [g, []])) };
+const STATUS_OPSI = [{ id: "BELUM_MULAI", nama: "Belum mulai" }, { id: "DALAM_PROSES", nama: "Dalam proses" }, { id: "MENUNGGU_REVIEW", nama: "Menunggu review" },
+  { id: "REVISI", nama: "Revisi" }, { id: "TERKENDALA", nama: "Terkendala" }, { id: "SELESAI", nama: "Selesai" }];
+const TENGGAT_OPSI = [{ id: "LEWAT", nama: "Terlambat" }, { id: "HARI_INI", nama: "Hari ini" }, { id: "PEKAN", nama: "7 hari ke depan" }, { id: "NANTI", nama: "Lebih dari 7 hari" }, { id: "NONE", nama: "Tanpa deadline" }];
+const URUT_KONTEN = ["IDE", "SCRIPTING", "SCRIPTED", "SHOOTING", "SHOOTED", "EDITING", "DESIGN", "DESIGNED", "REVIEW", "REVISI", "EDITED", "POSTING", "POSTED", "LAPORAN", "SELESAI"];
+
+function ChipGrup({ judul, g, opsi, filter, tog }) {
+  const pilih = filter[g] || [];
   return (
-    <select value={value} onChange={(e) => onChange(e.target.value)} data-testid={testId}
-      className="w-full rounded-md border border-emerald-200 bg-white px-2 py-1.5 text-xs text-emerald-900 focus:border-emerald-400 focus:outline-none">
-      {options.map((o) => <option key={o.id} value={o.id}>{o.nama}</option>)}
-    </select>
+    <div data-testid={`filter-${g}`}>
+      <p className="mb-1 text-[10px] font-medium text-emerald-800/70">{judul}{pilih.length > 0 && <span className="ml-1 text-emerald-600">({pilih.length})</span>}</p>
+      <div className="flex flex-wrap gap-1">
+        {opsi.map((o) => {
+          const on = pilih.includes(o.id);
+          return (
+            <button key={o.id} type="button" onClick={() => tog(g, o.id)} aria-pressed={on}
+              className={`rounded-full border px-2 py-0.5 text-[11px] transition ${on ? "border-emerald-800 bg-emerald-800 text-white" : "border-emerald-200 bg-white text-emerald-900 hover:border-emerald-400"}`}>
+              {on && "✓ "}{o.nama}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
