@@ -527,8 +527,27 @@ def build_auth_router(db: AsyncIOMotorDatabase) -> APIRouter:
         if (k.get("kind") == "gateway" and not is_spv) or (k["user_id"] != current["user_id"] and not is_spv):
             raise HTTPException(403, "Tidak boleh mengubah kunci ini.")
         await db.api_keys.update_one({"id": key_id}, {"$set": {"scope": payload.scope, "scope_diubah_at": datetime.now(timezone.utc),
+                                                              **({"boleh_hapus": False} if payload.scope == "read" else {}),
                                                               "scope_diubah_oleh": current.get("name")}})
         return {**k, "scope": payload.scope}
+
+    class HapusPayload(BaseModel):
+        boleh: bool
+
+    @router.put("/api-keys/{key_id}/hapus")
+    async def ubah_izin_hapus(key_id: str, payload: HapusPayload, request: Request):
+        """SPV: izinkan kunci PRIBADI ber-scope write memakai tool arsip/hapus (mis. kunci Hermes milik lead)."""
+        current = await get_current_user(request)
+        if current.get("role") != "spv":
+            raise HTTPException(403, "Hanya SPV yang bisa memberi izin hapus/arsip ke AI.")
+        k = await db.api_keys.find_one({"id": key_id, "revoked_at": None}, {"_id": 0, "key_hash": 0})
+        if not k:
+            raise HTTPException(404, "API key tidak ditemukan atau sudah dicabut.")
+        if payload.boleh and (k.get("kind") != "personal" or k.get("scope") != "write"):
+            raise HTTPException(400, "Izin hapus hanya untuk kunci pribadi dengan akses tulis/edit.")
+        await db.api_keys.update_one({"id": key_id}, {"$set": {"boleh_hapus": payload.boleh, "boleh_hapus_oleh": current.get("name"),
+                                                              "boleh_hapus_at": datetime.now(timezone.utc)}})
+        return {**k, "boleh_hapus": payload.boleh}
 
     @router.delete("/api-keys/{key_id}")
     async def revoke_api_key(key_id: str, request: Request):

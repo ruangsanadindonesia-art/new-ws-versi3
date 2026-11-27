@@ -8,10 +8,11 @@ export const WARNA_PILIHAN = [
 ];
 
 // Tugas Produksi Konten (1 konten = 1 tugas, status khusus per tipe konten)
-export const KONTEN_JENIS = { REELS: "Reels / Video", CAROUSEL: "Carousel", SINGLE: "Single image", THREADS: "Threads", STORY: "IG Story", WA: "WA Channel" };
-export const KONTEN_STATUS = { IDE: "Ide", SCRIPTING: "Scripting", SCRIPTED: "Scripted", SHOOTING: "Shooting", SHOOTED: "Shooted", EDITING: "Editing", DESIGN: "Design", DESIGNED: "Designed", REVIEW: "Review", REVISI: "Revisi", EDITED: "Edited", POSTING: "Posting", POSTED: "Posted", LAPORAN: "Laporan", SELESAI: "Selesai" };
-export const kontenWarna = (s) => (s === "SELESAI" ? "bg-emerald-600 text-white" : s === "REVISI" ? "bg-red-600 text-white" : ["REVIEW", "DESIGNED"].includes(s) ? "bg-amber-100 text-amber-900"
-  : ["POSTED", "LAPORAN"].includes(s) ? "bg-sky-100 text-sky-900" : s === "IDE" ? "bg-slate-100 text-slate-700" : "bg-violet-100 text-violet-900");
+export const KONTEN_JENIS = { REELS: "Reels / Video", CAROUSEL: "Carousel", SINGLE: "Single image", THREADS: "Threads", STORY: "IG Story", WA: "WA Channel", KOL: "KOL / UGC" };
+export const KONTEN_STATUS = { IDE: "Ide", SCRIPTING: "Scripting", SCRIPTED: "Scripted", SHOOTING: "Shooting", SHOOTED: "Shooted", EDITING: "Editing", DESIGN: "Design", DESIGNED: "Designed", REVIEW: "Review", REVISI: "Revisi", EDITED: "Edited", POSTING: "Posting", POSTED: "Posted", LAPORAN: "Laporan", SELESAI: "Selesai", IKLAN_AKTIF: "Iklan aktif", SHORTLIST: "Shortlist", OUTREACH: "Outreach & nego", DEAL: "Deal", BRIEF: "Brief", DRAFT: "Draft kreator" };
+export const kontenWarna = (s) => (s === "SELESAI" ? "bg-emerald-600 text-white" : s === "REVISI" ? "bg-red-600 text-white"
+  : s === "REVIEW" ? "bg-yellow-300 text-yellow-950 ring-1 ring-yellow-500" : ["EDITED", "DESIGNED", "IKLAN_AKTIF"].includes(s) ? "bg-orange-100 text-orange-900"
+    : ["POSTED", "LAPORAN"].includes(s) ? "bg-sky-100 text-sky-900" : ["IDE", "SHORTLIST"].includes(s) ? "bg-slate-100 text-slate-700" : "bg-violet-100 text-violet-900");
 export function KontenStatus({ t }) {
   return <span className={`inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-semibold ${kontenWarna(t.konten_status)}`} data-testid={`konten-status-${t.id}`}>{KONTEN_STATUS[t.konten_status] || t.konten_status}</span>;
 }

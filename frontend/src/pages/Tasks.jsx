@@ -17,6 +17,7 @@ import {
 import KanbanBoard from "./tasks/KanbanBoard";
 import StatusBoard from "./tasks/StatusBoard";
 import TableView from "./tasks/TableView";
+import PerOrang from "./tasks/PerOrang";
 import { KONTEN_JENIS, KONTEN_STATUS } from "./tasks/shared";
 import {
   TaskDialog, MoveTaskDialog, BulkMoveDialog,
@@ -405,6 +406,8 @@ export default function Tasks() {
             className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium ${view === "board" ? "bg-emerald-900 text-white" : "text-emerald-800"}`}><LayoutGrid size={13} /> Kanban</button>
           <button data-testid="view-table" onClick={() => setView("table")}
             className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium ${view === "table" ? "bg-emerald-900 text-white" : "text-emerald-800"}`}><TableIcon size={13} /> Tabel</button>
+          {isTim && <button data-testid="view-orang" onClick={() => setView("orang")}
+            className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium ${view === "orang" ? "bg-emerald-900 text-white" : "text-emerald-800"}`}><Users size={13} /> Per orang</button>}
         </div>}
 
         <Button onClick={openNew} data-testid="add-task-button" className="bg-emerald-900 text-white hover:bg-emerald-800 h-9"><Plus size={16} /> Tugas Baru</Button>
@@ -443,7 +446,9 @@ export default function Tasks() {
       )}
 
       {/* Main */}
-      {view === "board" && !(isTim && divisiId !== "ALL") ? (
+      {view === "orang" && isTim ? (
+        <PerOrang tasks={filtered} anggota={divisiId === "ALL" ? [] : anggotaAll.filter((a) => a.divisi_id === divisiId)} anggotaMap={anggotaMap} onEdit={openEdit} />
+      ) : view === "board" && !(isTim && divisiId !== "ALL") ? (
         <StatusBoard tasks={filtered} anggotaMap={anggotaMap} onEdit={openEdit} onPindah={pindahStatus} arsipMode={arsipMode} />
       ) : view === "board" && isTim && divisiId !== "ALL" ? (
         <KanbanBoard lists={lists} tasks={filtered} labels={labels} anggotaMap={anggotaMap} arsipMode={arsipMode} divisiId={divisiId}
@@ -486,7 +491,7 @@ const FILTER_KOSONG = { search: "", ...Object.fromEntries(FILTER_GRUP.map((g) =>
 const STATUS_OPSI = [{ id: "BELUM_MULAI", nama: "Belum mulai" }, { id: "DALAM_PROSES", nama: "Dalam proses" }, { id: "MENUNGGU_REVIEW", nama: "Menunggu review" },
   { id: "REVISI", nama: "Revisi" }, { id: "TERKENDALA", nama: "Terkendala" }, { id: "SELESAI", nama: "Selesai" }];
 const TENGGAT_OPSI = [{ id: "LEWAT", nama: "Terlambat" }, { id: "HARI_INI", nama: "Hari ini" }, { id: "PEKAN", nama: "7 hari ke depan" }, { id: "NANTI", nama: "Lebih dari 7 hari" }, { id: "NONE", nama: "Tanpa deadline" }];
-const URUT_KONTEN = ["IDE", "SCRIPTING", "SCRIPTED", "SHOOTING", "SHOOTED", "EDITING", "DESIGN", "DESIGNED", "REVIEW", "REVISI", "EDITED", "POSTING", "POSTED", "LAPORAN", "SELESAI"];
+const URUT_KONTEN = ["SHORTLIST", "OUTREACH", "DEAL", "BRIEF", "IDE", "SCRIPTING", "SCRIPTED", "SHOOTING", "SHOOTED", "EDITING", "DESIGN", "DRAFT", "REVIEW", "REVISI", "EDITED", "DESIGNED", "IKLAN_AKTIF", "POSTING", "POSTED", "LAPORAN", "SELESAI"];
 
 function ChipGrup({ judul, g, opsi, filter, tog }) {
   const pilih = filter[g] || [];

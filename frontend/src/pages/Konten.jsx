@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { formatApiErr } from "@/lib/AuthContext";
-import { K, JENIS_URUT, JENIS_PENDEK, JenisBadge, StatusBadge, FASE, faseOf, ymd, tglPendek, fmt, PERAN_LABEL } from "./konten/shared";
+import { K, JENIS_URUT, JENIS_PENDEK, JenisBadge, StatusBadge, FASE, faseOf, ymd, tglPendek, fmt, PERAN_LABEL, URUT_STATUS, platformLabel } from "./konten/shared";
 import DetailKonten from "./konten/Detail";
 import BaruDialog from "./konten/Baru";
 
@@ -17,7 +17,7 @@ function Kartu({ k, onBuka }) {
   return (
     <button onClick={() => onBuka(k)} className={`w-full rounded-lg border bg-white p-2.5 text-left shadow-sm hover:border-emerald-300 ${k.terlambat ? "border-red-200" : "border-emerald-100"}`} data-testid={`konten-${k.kode}`}>
       <div className="flex items-center gap-1.5 text-[10px] text-emerald-800/60">
-        <JenisBadge j={k.jenis} /><span className="font-mono">{k.kode}</span>
+        <JenisBadge j={k.jenis} iklan={k.iklan} /><span className="font-mono">{k.kode}</span>
         <span className={`ml-auto ${k.terlambat ? "font-semibold text-red-600" : ""}`}>{k.terlambat && <AlertTriangle size={10} className="mb-0.5 mr-0.5 inline" />}{tglPendek(k.tanggal_tayang)}{k.jam_tayang ? ` ${k.jam_tayang}` : ""}</span>
       </div>
       <p className="mt-1 line-clamp-2 text-sm font-medium leading-snug text-emerald-950">{k.judul}</p>
@@ -33,7 +33,8 @@ function Kartu({ k, onBuka }) {
 function Pipeline({ rows, jenis, meta, onBuka }) {
   // Satu tipe dipilih → kolom = status tipe itu. Campuran → kolom = fase.
   const kolom = jenis.length === 1
-    ? meta.jenis[jenis[0]].alur.map((a) => ({ k: a.k, label: a.label, cocok: (x) => x.status_konten === a.k }))
+    ? URUT_STATUS.filter((s) => [...meta.jenis[jenis[0]].alur, ...(meta.jenis[jenis[0]].alur_iklan || [])].some((a) => a.k === s))
+      .map((s) => ({ k: s, label: meta.status_label[s], cocok: (x) => x.status_konten === s }))
     : FASE.map((f) => ({ k: f.k, label: f.label, cocok: (x) => faseOf(x) === f.k }));
   return (
     <div className="-mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto px-1 pb-2" data-testid="konten-pipeline">
@@ -56,35 +57,50 @@ function Pipeline({ rows, jenis, meta, onBuka }) {
   );
 }
 
-function Kalender({ rows, bulan, onBuka }) {
+function Kalender({ rows, bulan, onBuka, meta }) {
   const y = bulan.getFullYear(), m = bulan.getMonth();
-  const awal = (new Date(y, m, 1).getDay() + 6) % 7;
+  const awal = new Date(y, m, 1).getDay(); // Ahad = 0 (kalender dimulai hari Ahad)
   const n = akhirBulan(bulan).getDate();
   const sel = [...Array(awal).fill(null), ...Array.from({ length: n }, (_, i) => i + 1)];
   const hariIni = ymd(new Date());
+  // Satu konten bisa muncul di beberapa tanggal (jadwal per platform). Iklan = tanggal produksi.
+  const entri = [];
+  rows.forEach((k) => {
+    const grup = {};
+    Object.entries(k.jadwal || {}).forEach(([p, v]) => { if (v?.tanggal) (grup[v.tanggal] = grup[v.tanggal] || []).push(p); });
+    if (!Object.keys(grup).length && k.tanggal_tayang) grup[k.tanggal_tayang] = [];
+    Object.entries(grup).forEach(([t, ps]) => entri.push({ t, k, ps, jam: ps.map((p) => k.jadwal?.[p]?.jam).filter(Boolean).sort()[0] || "" }));
+  });
+  entri.sort((a, b) => (a.jam || "99").localeCompare(b.jam || "99"));
   return (
     <div className="overflow-x-auto rounded-xl border border-emerald-100 bg-white" data-testid="konten-kalender">
       <div className="grid min-w-[760px] grid-cols-7">
-        {["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Ahad"].map((h) => <div key={h} className="border-b border-emerald-50 px-2 py-1.5 text-[11px] font-semibold text-emerald-800/70">{h}</div>)}
+        {["Ahad", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"].map((h, i) => <div key={h} className={`border-b border-emerald-50 px-2 py-1.5 text-[11px] font-semibold ${i === 0 ? "text-red-600" : "text-emerald-800/70"}`}>{h}</div>)}
         {sel.map((d, i) => {
           const t = d ? ymd(new Date(y, m, d)) : null;
-          const isi = t ? rows.filter((k) => k.tanggal_tayang === t) : [];
+          const ahad = i % 7 === 0;
+          const isi = t ? entri.filter((e) => e.t === t) : [];
           return (
-            <div key={i} className={`min-h-[104px] border-b border-r border-emerald-50 p-1 ${t === hariIni ? "bg-emerald-50/60" : ""}`}>
-              {d && <p className={`mb-1 text-[11px] font-semibold ${t === hariIni ? "text-emerald-900" : "text-emerald-800/50"}`}>{d}</p>}
+            <div key={i} className={`min-h-[104px] border-b border-r border-emerald-50 p-1 ${t === hariIni ? "bg-emerald-50/60" : ahad ? "bg-red-50/30" : ""}`}>
+              {d && <p className={`mb-1 text-[11px] font-semibold ${ahad ? "text-red-600" : t === hariIni ? "text-emerald-900" : "text-emerald-800/50"}`}>{d}</p>}
               <div className="space-y-1">
-                {isi.slice(0, 6).map((k) => (
-                  <button key={k.id} onClick={() => onBuka(k)} title={`${k.kode} · ${k.jenis_label} · ${k.status_label}${k.jam_tayang ? ` · ${k.jam_tayang}` : ""}\n${k.judul}`}
-                    className={`flex w-full items-center gap-1 truncate rounded border px-1 py-0.5 text-left text-[10px] ${k.terlambat ? "border-red-200 bg-red-50" : ["SELESAI", "POSTED", "LAPORAN"].includes(k.status_konten) ? "border-emerald-100 bg-emerald-50" : "border-amber-100 bg-amber-50/60"}`}>
-                    <JenisBadge j={k.jenis} /><span className="truncate text-emerald-950">{k.judul}</span>
-                  </button>
-                ))}
+                {isi.slice(0, 6).map(({ k, ps, jam }) => {
+                  const tayang = ps.length > 0 && ps.every((p) => k.links?.[p]);
+                  const plat = k.iklan ? "Produksi iklan" : k.grup === "TEKS" ? "" : ps.map((p) => platformLabel(meta, p)).join(", ");
+                  return (
+                    <button key={`${k.id}-${ps.join()}`} onClick={() => onBuka(k)} title={`${k.kode} · ${k.jenis_label} · ${k.status_label}${plat ? ` · ${plat}` : ""}${jam ? ` · ${jam}` : ""}\n${k.judul}`}
+                      className={`flex w-full items-center gap-1 truncate rounded border px-1 py-0.5 text-left text-[10px] ${k.terlambat ? "border-red-200 bg-red-50" : tayang || ["SELESAI", "LAPORAN"].includes(k.status_konten) ? "border-emerald-100 bg-emerald-50" : k.status_konten === "REVIEW" ? "border-yellow-300 bg-yellow-50" : "border-amber-100 bg-amber-50/60"}`}>
+                      <JenisBadge j={k.jenis} iklan={k.iklan} />{jam && <span className="tabular-nums text-emerald-800/60">{jam}</span>}<span className="truncate text-emerald-950">{k.judul}</span>
+                    </button>
+                  );
+                })}
                 {isi.length > 6 && <p className="text-center text-[10px] text-emerald-800/50">+{isi.length - 6} lagi</p>}
               </div>
             </div>
           );
         })}
       </div>
+      <p className="border-t border-emerald-50 px-3 py-1.5 text-[10px] text-emerald-800/50">Konten organik tampil di tanggal posting tiap platform; konten iklan tampil di tanggal produksinya. Kuning tebal = menunggu review.</p>
     </div>
   );
 }
@@ -101,7 +117,7 @@ function Daftar({ rows, onBuka }) {
           {rows.map((k) => (
             <tr key={k.id} onClick={() => onBuka(k)} className="cursor-pointer border-t border-emerald-50 hover:bg-emerald-50/40">
               <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-emerald-800/70">{k.kode}</td>
-              <td className="px-3 py-2"><JenisBadge j={k.jenis} /></td>
+              <td className="px-3 py-2"><JenisBadge j={k.jenis} iklan={k.iklan} /></td>
               <td className="max-w-[280px] truncate px-3 py-2 font-medium text-emerald-950">{k.judul}</td>
               <td className="whitespace-nowrap px-3 py-2 text-xs">{tglPendek(k.tanggal_tayang)}{k.jam_tayang ? ` ${k.jam_tayang}` : ""}</td>
               <td className="px-3 py-2"><StatusBadge k={k} /></td>
@@ -175,10 +191,11 @@ function Performa({ bulan, jenis, onBuka }) {
   );
 }
 
-function PilihAnggota({ meta, v, onChange, label }) {
+function PilihAnggota({ meta, v, onChange, label, semua = false }) {
+  const opsi = semua ? meta.anggota_semua : meta.anggota_tim;
   return (
     <select value={v || ""} onChange={(e) => onChange(e.target.value)} className="h-9 w-full rounded-md border border-input bg-white px-2 text-xs" aria-label={label}>
-      <option value="">—</option>{meta.anggota_tim.map((a) => <option key={a.id} value={a.id}>{a.nama}</option>)}
+      <option value="">—</option>{opsi.map((a) => <option key={a.id} value={a.id}>{a.nama}{semua && a.tim ? ` · ${a.tim}` : ""}</option>)}
     </select>
   );
 }
@@ -197,9 +214,9 @@ function PeranDialog({ meta, onClose, onSaved }) {
         <DialogHeader><DialogTitle className="font-display text-lg">Peran tim konten</DialogTitle>
           <DialogDescription className="text-emerald-800/70">Menentukan siapa memegang tugas di tiap status. Perubahan langsung berlaku juga untuk konten yang sedang berjalan.</DialogDescription></DialogHeader>
         <div className="space-y-2">
-          {["LEAD", "PRODUKSI", "PUBLISHER"].map((r) => (
+          {["LEAD", "PRODUKSI", "PUBLISHER", "IKLAN"].map((r) => (
             <div key={r} className="grid grid-cols-[150px_1fr] items-center gap-2"><span className="text-xs font-medium text-emerald-950">{PERAN_LABEL[r]}</span>
-              <PilihAnggota meta={meta} v={peran[r]} label={r} onChange={(v) => setPeran({ ...peran, [r]: v })} /></div>
+              <PilihAnggota meta={meta} v={peran[r]} label={r} semua={r === "IKLAN"} onChange={(v) => setPeran({ ...peran, [r]: v })} /></div>
           ))}
           <p className="pt-2 text-xs font-semibold text-emerald-950">Penulis copy (status Scripting)</p>
           {teks.map((j) => (
@@ -218,7 +235,8 @@ function Panduan({ meta }) {
   const [buka, setBuka] = useState(() => { try { return localStorage.getItem("ws_konten_panduan2") === "1"; } catch { return false; } });
   const toggle = () => { setBuka(!buka); try { localStorage.setItem("ws_konten_panduan2", buka ? "0" : "1"); } catch { /* abaikan */ } };
   const nama = (r, j) => (r === "PENULIS" ? meta.jenis[j].penulis?.nama : meta.peran[r]?.nama) || "-";
-  const grup = [["REELS", "Reels / Video"], ["CAROUSEL", "Carousel & Single image"], ["THREADS", "Threads, IG Story, WA Channel"]];
+  const grup = [["REELS", "Reels / Video", false], ["CAROUSEL", "Carousel & Single image", false], ["REELS", "Konten iklan (Reels; Carousel/Single serupa dengan Designed)", true],
+    ["THREADS", "Threads, IG Story, WA Channel", false], ["KOL", "KOL / UGC", false]];
   return (
     <section className="rounded-xl border border-emerald-100 bg-white" data-testid="konten-panduan">
       <button onClick={toggle} className="flex w-full items-center justify-between px-4 py-2 text-left text-sm font-semibold text-emerald-950">
@@ -226,24 +244,27 @@ function Panduan({ meta }) {
       </button>
       {buka && (
         <div className="space-y-3 border-t border-emerald-50 p-4">
-          {grup.map(([j, l]) => (
-            <div key={j} className="overflow-x-auto">
+          {grup.map(([j, l, ik]) => {
+            const alur = ik ? meta.jenis[j].alur_iklan : meta.jenis[j].alur;
+            return (
+            <div key={l} className="overflow-x-auto">
               <p className="mb-1 text-xs font-semibold text-emerald-950">{l}</p>
               <table className="text-[11px]"><tbody>
-                {["LEAD", "PENULIS", "PRODUKSI", "PUBLISHER"].filter((r) => meta.jenis[j].alur.some((a) => a.pemegang.includes(r)))
+                {["LEAD", "PENULIS", "PRODUKSI", "PUBLISHER", "IKLAN"].filter((r) => alur.some((a) => a.pemegang.includes(r)))
                   .filter((r) => r !== "PENULIS" || nama("PENULIS", j) !== nama("LEAD", j)).map((r) => {
                     // Penulis = lead → digabung ke baris lead.
                     const peranku = (a) => [r, ...(r === "LEAD" && nama("PENULIS", j) === nama("LEAD", j) ? ["PENULIS"] : [])].some((x) => a.pemegang.includes(x));
                     const kerjaku = (a) => a.pelaksana === r || (r === "LEAD" && a.pelaksana === "PENULIS" && nama("PENULIS", j) === nama("LEAD", j));
                     return (
                       <tr key={r}><td className="whitespace-nowrap pr-3 font-medium text-emerald-900">{nama(r, j)}</td>
-                        {meta.jenis[j].alur.map((a) => <td key={a.k} className="px-0.5 py-0.5"><span className={`whitespace-nowrap rounded px-1.5 py-0.5 ${peranku(a) ? (kerjaku(a) ? "bg-emerald-800 text-white" : "bg-emerald-100 text-emerald-900") : "text-slate-300"}`}>{a.label}</span></td>)}</tr>
+                        {alur.map((a) => <td key={a.k} className="px-0.5 py-0.5"><span className={`whitespace-nowrap rounded px-1.5 py-0.5 ${peranku(a) ? (kerjaku(a) ? "bg-emerald-800 text-white" : "bg-emerald-100 text-emerald-900") : "text-slate-300"}`}>{a.label}</span></td>)}</tr>
                     );
                   })}
               </tbody></table>
             </div>
-          ))}
-          <p className="text-[11px] text-emerald-800/70">Hijau tua = yang mengerjakan langkah itu. Hijau muda = tugasnya ikut tampil di <b>Tugas › Untuk saya</b>. Otomatis: semua link platform terisi → Posted; 72 jam setelah Posted → Laporan; performa terisi → Selesai. Semua anggota tim tetap bisa melihat seluruh konten di menu ini.</p>
+            );
+          })}
+          <p className="text-[11px] text-emerald-800/70">Hijau tua = yang mengerjakan langkah itu. Hijau muda = tugasnya ikut tampil di <b>Tugas › Untuk saya</b>. Otomatis: setor hasil/revisi → Review (kuning, tugas lead); disetujui → Posting (organik) atau Edited/Designed (iklan, tugas tim iklan); semua link platform terisi → Posted; 72 jam setelah Posted → Laporan; laporan terisi → Selesai. Target produksi = H-1 jadwal posting terdekat; editor tidak bisa mengubah jadwal, tapi bisa minta perpanjangan. Semua anggota tim tetap bisa melihat seluruh konten di menu ini.</p>
         </div>
       )}
     </section>
@@ -341,7 +362,7 @@ export default function Konten() {
       {view === "performa" ? <Performa bulan={bulan} jenis={jenis} onBuka={bukaKonten} />
         : rows === null ? <div className="grid place-items-center p-12"><Loader2 className="animate-spin text-emerald-800" /></div>
         : view === "pipeline" ? <Pipeline rows={filtered} jenis={jenis} meta={meta} onBuka={bukaKonten} />
-        : view === "kalender" ? <Kalender rows={filtered} bulan={bulan} onBuka={bukaKonten} />
+        : view === "kalender" ? <Kalender rows={filtered} bulan={bulan} onBuka={bukaKonten} meta={meta} />
         : <Daftar rows={filtered} onBuka={bukaKonten} />}
 
       {buka && <DetailKonten k={buka} meta={meta} onClose={tutup} onSaved={segar} />}

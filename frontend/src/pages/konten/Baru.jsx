@@ -6,16 +6,17 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { formatApiErr } from "@/lib/AuthContext";
 import { K, JENIS_URUT, JenisBadge, ymd, tambahHari, seninDari, tglPendek } from "./shared";
-import { IsiFields, PlatformPilih } from "./Fields";
+import { IsiFields, PlatformPilih, JadwalEditor } from "./Fields";
+import { platformLabel } from "./shared";
 
 const HARI = ["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Ahad"];
 
-function AlurRingkas({ def, meta }) {
+function AlurRingkas({ def, meta, iklan = false }) {
   return (
     <div className="rounded-lg bg-emerald-50/60 p-2.5 text-[11px] text-emerald-900">
       <p className="mb-1 font-semibold">Alur & siapa yang memegang</p>
       <div className="flex flex-wrap gap-1">
-        {def.alur.map((a) => {
+        {(iklan ? def.alur_iklan : def.alur).map((a) => {
           const nama = a.pelaksana === "PENULIS" ? def.penulis?.nama : meta.peran[a.pelaksana]?.nama;
           return <span key={a.k} className="rounded bg-white px-1.5 py-0.5" title={a.instruksi}>{a.label} <span className="text-emerald-800/50">· {nama || "-"}</span></span>;
         })}
@@ -26,35 +27,47 @@ function AlurRingkas({ def, meta }) {
 
 function FormSatu({ meta, jenis, onSaved, onBack }) {
   const def = meta.jenis[jenis];
-  const besok = new Date(); besok.setDate(besok.getDate() + (def.grup === "TEKS" ? 2 : 7));
-  const [f, setF] = useState({ judul: "", tanggal_tayang: ymd(besok), jam_tayang: def.slot[0]?.[0] || "", platforms: def.platform ? ["IG"] : [],
-    status: def.alur[0].k, isi: {} });
+  const teks = def.grup === "TEKS";
+  const besok = new Date(); besok.setDate(besok.getDate() + (teks ? 2 : 7));
+  const awal = { tanggal: ymd(besok), jam: def.slot[0]?.[0] || "" };
+  const opsiPlat = jenis === "KOL" ? meta.platform_kol : meta.platform;
+  const [f, setF] = useState({ judul: "", platforms: def.platform ? ["IG"] : [jenis], status: "", isi: {} });
+  const [jadwal, setJadwal] = useState({ [def.platform ? "IG" : jenis]: awal });
   const [busy, setBusy] = useState(false);
+  const iklan = f.platforms.length === 1 && f.platforms[0] === "IKLAN";
+  const alur = iklan ? def.alur_iklan : def.alur;
+  const fields = [...def.field, ...(iklan ? def.field_iklan || [] : [])];
+  const setPlat = (v) => {
+    const j = {}; v.forEach((p) => { j[p] = jadwal[p] || jadwal[f.platforms[0]] || awal; });
+    setF({ ...f, platforms: v, status: "" }); setJadwal(j);
+  };
   const simpan = async () => {
     setBusy(true);
-    try { const k = await K.buat({ jenis, ...f }); toast.success(`${k.kode} dibuat — masuk ke Tugas ${k.pemegang_nama.join(", ")}`); onSaved(k); }
-    catch (e) { toast.error(formatApiErr(e)); }
+    try {
+      const k = await K.buat({ jenis, judul: f.judul, platforms: f.platforms, jadwal, status: f.status || null, isi: f.isi });
+      toast.success(`${k.kode} dibuat — masuk ke Tugas ${k.pemegang_nama.join(", ")}`); onSaved(k);
+    } catch (e) { toast.error(formatApiErr(e)); }
     setBusy(false);
   };
+  const lengkap = f.platforms.length && f.platforms.every((p) => jadwal[p]?.tanggal);
   return (
     <div className="space-y-3">
-      <div><label className="text-xs font-medium" htmlFor="kb-judul">Judul / topik {def.grup === "TEKS" && <span className="font-normal text-emerald-800/50">(boleh kosong — diambil dari hook/isi)</span>}</label>
-        <Input id="kb-judul" value={f.judul} onChange={(e) => setF({ ...f, judul: e.target.value })} placeholder="mis. 9 Hukum Idgham" data-testid="kb-judul" /></div>
-      <div className="grid grid-cols-3 gap-2">
-        <div className="col-span-2"><label className="text-xs font-medium" htmlFor="kb-tgl">Tanggal tayang</label><Input id="kb-tgl" type="date" value={f.tanggal_tayang} onChange={(e) => setF({ ...f, tanggal_tayang: e.target.value })} className="bg-white" data-testid="kb-tgl" /></div>
-        <div><label className="text-xs font-medium" htmlFor="kb-jam">Jam</label><Input id="kb-jam" type="time" value={f.jam_tayang} onChange={(e) => setF({ ...f, jam_tayang: e.target.value })} className="bg-white" /></div>
-      </div>
-      {def.platform && <div><p className="text-xs font-medium">Platform</p><div className="mt-1"><PlatformPilih meta={meta} value={f.platforms} onChange={(v) => setF({ ...f, platforms: v })} /></div></div>}
-      <IsiFields def={def} isi={f.isi} idp="kb" setIsi={(isi) => setF({ ...f, isi })} />
+      <div><label className="text-xs font-medium" htmlFor="kb-judul">{jenis === "KOL" ? "Judul kolaborasi" : "Judul / topik"} {(teks || jenis === "KOL") && <span className="font-normal text-emerald-800/50">(boleh kosong — diambil dari {jenis === "KOL" ? "nama kreator" : "hook/isi"})</span>}</label>
+        <Input id="kb-judul" value={f.judul} onChange={(e) => setF({ ...f, judul: e.target.value })} placeholder={jenis === "KOL" ? "mis. UGC Nita — testimoni kelas" : "mis. 9 Hukum Idgham"} data-testid="kb-judul" /></div>
+      {def.platform && <div><p className="text-xs font-medium">Platform {jenis !== "KOL" && <span className="font-normal text-emerald-800/50">· pilih Iklan untuk konten iklan (terpisah dari organik)</span>}</p>
+        <div className="mt-1"><PlatformPilih opsi={opsiPlat} value={f.platforms} onChange={setPlat} /></div></div>}
+      <JadwalEditor platforms={f.platforms} jadwal={jadwal} setJadwal={setJadwal} label={(p) => platformLabel(meta, p)} iklan={iklan} teks={teks} />
+      <IsiFields fields={fields} isi={f.isi} idp="kb" setIsi={(isi) => setF({ ...f, isi })} />
       <div><label className="text-xs font-medium" htmlFor="kb-status">Mulai dari status</label>
-        <select id="kb-status" value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })} className="h-9 w-full rounded-md border border-input bg-white px-2 text-sm">
-          {def.alur.filter((a) => !["POSTED", "LAPORAN", "SELESAI"].includes(a.k)).map((a) => <option key={a.k} value={a.k}>{a.label}</option>)}
+        <select id="kb-status" value={f.status || alur[0].k} onChange={(e) => setF({ ...f, status: e.target.value })} className="h-9 w-full rounded-md border border-input bg-white px-2 text-sm">
+          {alur.filter((a) => !["POSTED", "LAPORAN", "SELESAI", "IKLAN_AKTIF"].includes(a.k)).map((a) => <option key={a.k} value={a.k}>{a.label}</option>)}
         </select>
         <p className="mt-0.5 text-[10px] text-emerald-800/50">Biasanya dari awal. Pilih status lain bila naskah/materinya sudah ada.</p></div>
-      <AlurRingkas def={def} meta={meta} />
+      <AlurRingkas def={def} meta={meta} iklan={iklan} />
       <div className="flex justify-end gap-2">
         <Button variant="outline" onClick={onBack}>Kembali</Button>
-        <Button onClick={simpan} disabled={busy || (def.grup !== "TEKS" && f.judul.trim().length < 3) || (def.platform && !f.platforms.length)} className="bg-emerald-900 text-white hover:bg-emerald-800" data-testid="kb-simpan">{busy && <Loader2 size={14} className="animate-spin" />} Buat konten</Button>
+        <Button onClick={simpan} disabled={busy || !lengkap || (!teks && jenis !== "KOL" && f.judul.trim().length < 3) || (jenis === "KOL" && !f.judul.trim() && !(f.isi.nama_kreator || "").trim())}
+          className="bg-emerald-900 text-white hover:bg-emerald-800" data-testid="kb-simpan">{busy && <Loader2 size={14} className="animate-spin" />} Buat konten</Button>
       </div>
     </div>
   );
@@ -115,7 +128,7 @@ function PlannerTeks({ meta, jenis, onSaved, onBack }) {
               <button type="button" onClick={() => setPosts(posts.filter((_, j) => j !== i))} className="text-red-600" aria-label="Hapus"><Trash2 size={13} /></button>
               <button type="button" onClick={() => toggle(i)} className="text-emerald-700" aria-label="Buka">{buka.has(i) ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
             </div>
-            {buka.has(i) && <div className="border-t border-emerald-50 p-2"><IsiFields def={def} isi={p.isi} idp={`pt${i}`} setIsi={(isi) => setIsi(i, isi)} /></div>}
+            {buka.has(i) && <div className="border-t border-emerald-50 p-2"><IsiFields fields={def.field} isi={p.isi} idp={`pt${i}`} setIsi={(isi) => setIsi(i, isi)} /></div>}
           </div>
         ))}
       </div>

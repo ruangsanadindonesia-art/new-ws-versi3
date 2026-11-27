@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth, formatApiErr } from "@/lib/AuthContext";
-import { listApiKeys, createApiKey, revokeApiKey, ubahScopeApiKey, createLinkCode, listChatLinks, deleteChatLink, agentAudit } from "@/lib/api";
+import { listApiKeys, createApiKey, revokeApiKey, ubahScopeApiKey, izinHapusApiKey, createLinkCode, listChatLinks, deleteChatLink, agentAudit } from "@/lib/api";
 
 const MCP_URL = "https://workspace.ruangsanad.com/api/mcp";
 const fmt = (d) => (d ? new Date(d).toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—");
@@ -50,7 +50,7 @@ function CreatedKey({ created, onClose }) {
   );
 }
 
-function KeyRow({ k, onRevoke, showOwner, onScope }) {
+function KeyRow({ k, onRevoke, showOwner, onScope, onHapus }) {
   return (
     <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-100 px-3 py-2" data-testid={`api-key-${k.id}`}>
       <div className="min-w-0">
@@ -59,11 +59,17 @@ function KeyRow({ k, onRevoke, showOwner, onScope }) {
           <span className={`ml-2 rounded px-1.5 py-0.5 text-[10px] font-semibold ${k.kind === "gateway" ? "bg-sky-100 text-sky-800" : k.scope === "write" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"}`}>
             {k.kind === "gateway" ? `Gateway · ${k.scope === "write" ? "baca + edit" : "baca"}` : k.scope === "write" ? "Baca + tulis/edit" : "Baca saja"}
           </span>
+          {k.boleh_hapus && <span className="ml-1 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-800">+ hapus/arsip</span>}
         </p>
         <p className="font-mono text-[11px] text-emerald-800/60">
           {k.prefix}… · {showOwner && k.owner_name ? `${k.owner_name} · ` : ""}dipakai {fmt(k.last_used_at)}{k.revoked_at ? " · dicabut" : ""}
         </p>
       </div>
+      {!k.revoked_at && onHapus && k.kind === "personal" && k.scope === "write" && (
+        <Button type="button" size="sm" variant="outline" onClick={() => onHapus(k)} className="shrink-0 text-xs" data-testid={`hapus-izin-${k.id}`}>
+          {k.boleh_hapus ? "Cabut izin hapus" : "Izinkan hapus/arsip"}
+        </Button>
+      )}
       {!k.revoked_at && onScope && (
         <Button type="button" size="sm" variant="outline" onClick={() => onScope(k)} className="shrink-0 text-xs" data-testid={`scope-${k.id}`}>
           {k.scope === "write" ? "Jadikan baca saja" : "Izinkan edit"}
@@ -97,6 +103,12 @@ export default function IntegrasiAI() {
     const ke = k.scope === "write" ? "read" : "write";
     if (ke === "write" && k.kind === "gateway" && !window.confirm("Izinkan Hermes bersama mengubah data?\n\nAksi akan berjalan atas nama akun yang ditautkan ke chat. Identitas chat ditentukan oleh agent, jadi pastikan Hermes hanya dipakai di grup/chat tepercaya. Semua aksi tercatat di log.")) return;
     try { await ubahScopeApiKey(k.id, ke); toast.success(ke === "write" ? `"${k.name}" sekarang bisa membaca + mengedit` : `"${k.name}" sekarang baca saja`); await load(); }
+    catch (e) { toast.error(formatApiErr(e)); }
+  };
+  const gantiHapus = async (k) => {
+    const boleh = !k.boleh_hapus;
+    if (boleh && !window.confirm(`Izinkan kunci "${k.name}" (${k.owner_name || "pemilik"}) mengarsipkan, memulihkan, dan MENGHAPUS PERMANEN tugas lewat AI?\n\nBerlaku untuk tugas di mana pemilik kunci R/A atau tim yang dipimpinnya. Penghapusan tercatat di log beserta salinan datanya.`)) return;
+    try { await izinHapusApiKey(k.id, boleh); toast.success(boleh ? "Izin hapus/arsip diberikan" : "Izin hapus/arsip dicabut"); await load(); }
     catch (e) { toast.error(formatApiErr(e)); }
   };
   const load = async () => {
@@ -195,7 +207,7 @@ export default function IntegrasiAI() {
           </div>
           <div className="mt-4 space-y-2">
             {allKeys.length === 0 && <p className="text-xs text-emerald-800/60">Belum ada kunci aktif di organisasi.</p>}
-            {allKeys.map((k) => <KeyRow key={k.id} k={k} onRevoke={setConfirmRevoke} showOwner onScope={gantiScope} />)}
+            {allKeys.map((k) => <KeyRow key={k.id} k={k} onRevoke={setConfirmRevoke} showOwner onScope={gantiScope} onHapus={gantiHapus} />)}
           </div>
         </Section>
       )}

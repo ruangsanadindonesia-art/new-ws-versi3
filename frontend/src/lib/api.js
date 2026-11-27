@@ -25,6 +25,7 @@ export const resetUserPassword = (id, new_password) => api.put(`/auth/users/${id
 export const listApiKeys = (semua = false) => api.get("/auth/api-keys", { params: semua ? { semua: 1 } : {} }).then((r) => r.data);
 export const createApiKey = (name, scope = "read", kind = "personal") => api.post("/auth/api-keys", { name, scope, kind }).then((r) => r.data);
 export const ubahScopeApiKey = (id, scope) => api.put(`/auth/api-keys/${id}/scope`, { scope }).then((r) => r.data);
+export const izinHapusApiKey = (id, boleh) => api.put(`/auth/api-keys/${id}/hapus`, { boleh }).then((r) => r.data);
 export const revokeApiKey = (id) => api.delete(`/auth/api-keys/${id}`).then((r) => r.data);
 export const createLinkCode = () => api.post("/auth/agent/link-code").then((r) => r.data);
 export const listChatLinks = () => api.get("/auth/agent/links").then((r) => r.data);

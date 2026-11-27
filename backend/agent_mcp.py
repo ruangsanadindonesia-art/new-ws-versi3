@@ -103,12 +103,13 @@ def build_mcp_router(srv) -> APIRouter:
     # ------------------------------------------------------------------ tools
     TOOLS: Dict[str, dict] = {}
 
-    def tool(name: str, desc: str, props: dict, required: Optional[List[str]] = None, write: bool = False):
+    def tool(name: str, desc: str, props: dict, required: Optional[List[str]] = None, write: bool = False, hapus: bool = False):
+        """hapus=True: tool penghapus/pengarsip — hanya untuk kunci PRIBADI yang diberi izin hapus oleh SPV."""
         def deco(fn: Callable):
-            TOOLS[name] = {"fn": fn, "write": write, "schema": {
+            TOOLS[name] = {"fn": fn, "write": write or hapus, "hapus": hapus, "schema": {
                 "name": name, "description": desc,
                 "inputSchema": {"type": "object", "properties": props, "required": required or [], "additionalProperties": False},
-                "annotations": {"readOnlyHint": not write, "destructiveHint": False},
+                "annotations": {"readOnlyHint": not (write or hapus), "destructiveHint": hapus},
             }}
             return fn
         return deco
@@ -356,28 +357,32 @@ def build_mcp_router(srv) -> APIRouter:
                 "catatan_revisi": k.get("revisi_catatan") or None, "links": k.get("links") or {}, "performa": k.get("performa") or {},
                 "riwayat": [{"dari": r.get("dari"), "ke": r["ke"], "oleh": r.get("oleh"), "waktu": r["at"], "catatan": r.get("catatan")} for r in (k.get("riwayat") or [])[-15:]]}
 
-    @tool("buat_konten", "Buat konten baru (lead konten/SPV; kanal teks juga penulisnya). Otomatis jadi satu tugas. "
-          "tipe: REELS | CAROUSEL | SINGLE | THREADS | STORY | WA. platform (untuk REELS/CAROUSEL/SINGLE): IG, TIKTOK, SHORT, YT. "
-          "isi: objek field per tipe, mis. {pilar, bucket, funnel, cta_keyword, naskah_url, brief} atau untuk Threads {label, hook, isi, cta, bucket, pilar}.",
-          {"tipe": {"type": "string", "enum": ["REELS", "CAROUSEL", "SINGLE", "THREADS", "STORY", "WA"]}, "judul": {"type": "string"},
+    @tool("buat_konten", "Buat konten baru (lead konten/SPV; kanal teks juga penulisnya; KOL/UGC juga publisher). Otomatis jadi satu tugas. "
+          "tipe: REELS | CAROUSEL | SINGLE | THREADS | STORY | WA | KOL. platform: IG, TIKTOK, SHORT, YT (KOL juga FB); "
+          "IKLAN saja = konten iklan (tanggal = jadwal produksi, tugas iklan ke tim iklan). "
+          "Jadwal: tanggal_tayang (+jam) berlaku untuk semua platform, atau 'jadwal' per platform {\"IG\": {\"tanggal\": \"2026-12-01\", \"jam\": \"19:00\"}}. "
+          "isi: objek field per tipe, mis. Reels {pilar, bucket, funnel, cta_keyword, naskah_talent_url, naskah_editor_url, brief}; "
+          "Threads {label, hook, isi, cta, bucket, pilar}; KOL {nama_kreator, akun_url, jenis_kreator, skema, biaya, hak_pakai, brief_url}.",
+          {"tipe": {"type": "string", "enum": ["REELS", "CAROUSEL", "SINGLE", "THREADS", "STORY", "WA", "KOL"]}, "judul": {"type": "string"},
            "tanggal_tayang": {"type": "string"}, "jam_tayang": {"type": "string"}, "platform": {"type": "array", "items": {"type": "string"}},
-           "isi": {"type": "object"}}, ["tipe", "tanggal_tayang"], write=True)
+           "jadwal": {"type": "object"}, "isi": {"type": "object"}}, ["tipe"], write=True)
     async def t_konten_buat(user, ctx, a):
         kr = srv.konten_router
-        k = await kr.buat_fn(kr.KontenIn(jenis=a["tipe"], judul=a.get("judul") or "", tanggal_tayang=a["tanggal_tayang"],
-                                         jam_tayang=a.get("jam_tayang") or "", platforms=a.get("platform") or ["IG"],
+        k = await kr.buat_fn(kr.KontenIn(jenis=a["tipe"], judul=a.get("judul") or "", tanggal_tayang=a.get("tanggal_tayang"),
+                                         jam_tayang=a.get("jam_tayang") or "", platforms=a.get("platform") or ["IG"], jadwal=a.get("jadwal"),
                                          isi={x: str(v) for x, v in (a.get("isi") or {}).items()}), ctx["actor"])
         return {"ok": True, "konten": _konten_brief(k)}
 
-    @tool("ubah_konten", "Edit isi konten (hanya pemegang status saat ini, lead, atau SPV): judul, tanggal/jam tayang, platform, field isi, link hasil, link tayang per platform. "
+    @tool("ubah_konten", "Edit isi konten (pemegang status saat ini, lead, atau SPV): judul, field isi, link hasil, link tayang per platform. "
+          "Jadwal (tanggal_tayang/jam_tayang/jadwal per platform/platform) hanya bisa diubah lead; editor memakai minta_deadline_konten. "
           "Link tayang semua platform terisi → status otomatis Posted.",
           {"kode": {"type": "string"}, "judul": {"type": "string"}, "tanggal_tayang": {"type": "string"}, "jam_tayang": {"type": "string"},
            "platform": {"type": "array", "items": {"type": "string"}}, "isi": {"type": "object"}, "hasil_url": {"type": "string"},
-           "links": {"type": "object", "description": "mis. {\"IG\": \"https://...\"}"}}, ["kode"], write=True)
+           "jadwal": {"type": "object"}, "links": {"type": "object", "description": "mis. {\"IG\": \"https://...\"}"}}, ["kode"], write=True)
     async def t_konten_ubah(user, ctx, a):
         kr = srv.konten_router
         k0 = await kr.ambil(a["kode"])
-        body = {x: a[x] for x in ("judul", "tanggal_tayang", "jam_tayang", "hasil_url", "links") if x in a}
+        body = {x: a[x] for x in ("judul", "tanggal_tayang", "jam_tayang", "hasil_url", "links", "jadwal") if x in a}
         if "platform" in a:
             body["platforms"] = a["platform"]
         if "isi" in a:
@@ -388,13 +393,90 @@ def build_mcp_router(srv) -> APIRouter:
     @tool("aksi_konten", "Jalankan langkah alur konten (mis. setor hasil edit, setujui, minta revisi, sudah tayang). Lihat aksi_tersedia di detail_konten. "
           "Wajib: 'hasil' → isi hasil_url; 'catatan' → isi catatan revisi; 'link' → isi links semua platform.",
           {"kode": {"type": "string"}, "aksi": {"type": "string"}, "catatan": {"type": "string"}, "hasil_url": {"type": "string"},
-           "links": {"type": "object"}}, ["kode", "aksi"], write=True)
+           "links": {"type": "object"}, "isi": {"type": "object", "description": "field tambahan, mis. {iklan_campaign, iklan_url} atau {brief_url}"}},
+          ["kode", "aksi"], write=True)
     async def t_konten_aksi(user, ctx, a):
         kr = srv.konten_router
         k0 = await kr.ambil(a["kode"])
         k = await kr.aksi_fn(k0["id"], kr.AksiIn(aksi=a["aksi"], catatan=a.get("catatan") or "", hasil_url=a.get("hasil_url") or "",
-                                                 links=a.get("links")), ctx["actor"])
+                                                 links=a.get("links"), isi={x: str(v) for x, v in (a.get("isi") or {}).items()} or None), ctx["actor"])
         return {"ok": True, "status_sekarang": k["status_konten"], "konten": _konten_brief(k)}
+
+    @tool("minta_deadline_konten", "Editor/desainer meminta perpanjangan deadline produksi sebuah konten (diputuskan lead). tanggal YYYY-MM-DD.",
+          {"kode": {"type": "string"}, "tanggal": {"type": "string"}, "alasan": {"type": "string", "minLength": 3}}, ["kode", "tanggal", "alasan"], write=True)
+    async def t_minta_dl(user, ctx, a):
+        kr = srv.konten_router
+        k0 = await kr.ambil(a["kode"])
+        k = await kr.minta_deadline_fn(k0["id"], kr.MintaDeadlineIn(tanggal=a["tanggal"], alasan=a["alasan"]), ctx["actor"])
+        return {"ok": True, "permintaan": k.get("permintaan_deadline")}
+
+    @tool("putuskan_deadline_konten", "Lead/SPV menyetujui atau menolak permintaan deadline produksi.",
+          {"kode": {"type": "string"}, "setuju": {"type": "boolean"}, "catatan": {"type": "string"}}, ["kode", "setuju"], write=True)
+    async def t_putus_dl(user, ctx, a):
+        kr = srv.konten_router
+        k0 = await kr.ambil(a["kode"])
+        k = await kr.putus_deadline_fn(k0["id"], kr.PutusDeadlineIn(setuju=a["setuju"], catatan=a.get("catatan") or ""), ctx["actor"])
+        return {"ok": True, "deadline_produksi": k.get("target_produksi"), "status_permintaan": (k.get("permintaan_deadline") or {}).get("status")}
+
+    # --------------------------- tool hapus/arsip (hanya kunci pribadi yang diizinkan SPV)
+    async def _boleh_kelola(t: dict, user: dict) -> bool:
+        sc = await srv.user_scope(user)
+        if sc["is_spv"]:
+            return True
+        me = sc["anggota_id"]
+        if not me:
+            return False
+        if me in (t.get("penerima_tugas_id"), t.get("pemberi_id")):
+            return True
+        hd = sc["head_divisi_id"]
+        return bool(hd and (t.get("divisi_id") == hd or t.get("penerima_tugas_id") in await srv._tim_anggota_ids(hd)))
+
+    async def _ambil_tugas_kelola(task_id: str, user: dict) -> dict:
+        t = await db.tasks.find_one({"id": task_id}, {"_id": 0})
+        if not t:
+            raise HTTPException(404, "Tugas tidak ditemukan.")
+        if t.get("konten_id"):
+            raise HTTPException(400, "Tugas konten dibatalkan lewat tool batalkan_konten.")
+        if not await _boleh_kelola(t, user):
+            raise HTTPException(403, "Hanya tugas yang Anda kerjakan (R), Anda setujui (A), atau milik tim yang Anda pimpin.")
+        return t
+
+    @tool("arsipkan_tugas", "Arsipkan tugas (bisa dipulihkan). Berlaku untuk tugas di mana saya R/A atau tugas tim yang saya pimpin.",
+          {"task_id": {"type": "string"}}, ["task_id"], hapus=True)
+    async def t_arsip(user, ctx, a):
+        t = await _ambil_tugas_kelola(a["task_id"], user)
+        await db.tasks.update_one({"id": t["id"]}, {"$set": {"archived": True, "archived_at": srv.now_iso()}})
+        await srv._log_activity(t["id"], ctx["actor"], "status", "Tugas diarsipkan")
+        return {"ok": True, "diarsipkan": t["nama"]}
+
+    @tool("pulihkan_tugas", "Kembalikan tugas dari arsip.", {"task_id": {"type": "string"}}, ["task_id"], hapus=True)
+    async def t_pulih(user, ctx, a):
+        t = await _ambil_tugas_kelola(a["task_id"], user)
+        await db.tasks.update_one({"id": t["id"]}, {"$set": {"archived": False, "archived_at": None}})
+        await srv._log_activity(t["id"], ctx["actor"], "status", "Tugas dikembalikan dari arsip")
+        return {"ok": True, "dipulihkan": t["nama"]}
+
+    @tool("hapus_tugas", "HAPUS PERMANEN tugas beserta riwayatnya (tidak bisa dibatalkan). Pastikan pengguna sudah mengonfirmasi; "
+          "bila ragu, pakai arsipkan_tugas. Kirim konfirmasi = nama tugas persis.",
+          {"task_id": {"type": "string"}, "konfirmasi": {"type": "string", "description": "nama tugas persis, sebagai konfirmasi"}},
+          ["task_id", "konfirmasi"], hapus=True)
+    async def t_hapus(user, ctx, a):
+        t = await _ambil_tugas_kelola(a["task_id"], user)
+        if a["konfirmasi"].strip() != (t.get("nama") or "").strip():
+            raise HTTPException(400, f"Konfirmasi tidak cocok. Nama tugas: '{t.get('nama')}'.")
+        await db.agent_audit.insert_one({"at": _now(), "user_id": user.get("user_id"), "tool": "hapus_tugas", "via": "kunci pribadi",
+                                         "ok": True, "salinan": {k: v for k, v in t.items() if k != "_id"}})
+        await db.tasks.delete_one({"id": t["id"]})
+        await db.task_activity.delete_many({"task_id": t["id"]})
+        return {"ok": True, "dihapus": t["nama"]}
+
+    @tool("batalkan_konten", "Batalkan konten Produksi Konten (tugasnya diarsipkan). Lead konten/SPV.",
+          {"kode": {"type": "string"}}, ["kode"], hapus=True)
+    async def t_batal_konten(user, ctx, a):
+        kr = srv.konten_router
+        k0 = await kr.ambil(a["kode"])
+        await kr.batal_fn(k0["id"], ctx["actor"])
+        return {"ok": True, "dibatalkan": k0["kode"]}
 
     @tool("isi_performa_konten", "Isi angka performa konten yang sudah tayang (publisher/lead/SPV). platform: IG/TIKTOK/SHORT/YT (kanal teks: kosongkan). "
           "angka: objek metrik, mis. {views, reach, likes, comments, saves, shares, follows, dm, tanya_harga, tanya_program, voice_note, pendaftaran}. "
@@ -432,6 +514,8 @@ def build_mcp_router(srv) -> APIRouter:
     def _tool_list(ctx: dict) -> List[dict]:
         out = []
         for name, t in TOOLS.items():
+            if t.get("hapus") and not (ctx["kind"] == "personal" and ctx["scope"] == "write" and ctx["key"].get("boleh_hapus")):
+                continue
             if ctx["kind"] == "gateway":
                 if t["write"] and ctx["scope"] != "write":
                     continue
